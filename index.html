@@ -10,7 +10,58 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="page-shell">
+    <section id="modeScreen" class="loading-screen">
+      <div class="loading-panel">
+        <p class="eyebrow">Choose Your Table</p>
+        <h1>Club Night</h1>
+        <p class="hero-copy">
+          Pick a room to load. Pool launches the full 8-ball table now, and
+          poker has a lounge screen ready while that mode is still being built.
+        </p>
+
+        <div class="mode-grid">
+          <button id="choosePoolBtn" class="mode-card" type="button">
+            <span class="mode-tag">Live Now</span>
+            <strong>Pool</strong>
+            <span>
+              Perspective table, CPU opponent, assisted aiming, spin, and WPA
+              call-shot rules.
+            </span>
+          </button>
+
+          <button id="choosePokerBtn" class="mode-card mode-card-alt" type="button">
+            <span class="mode-tag">Coming Soon</span>
+            <strong>Poker</strong>
+            <span>
+              Reserved for a future card-room mode with its own table,
+              interface, and game flow.
+            </span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section id="pokerPlaceholder" class="mode-placeholder" hidden>
+      <div class="mode-placeholder-card">
+        <p class="eyebrow">Poker Lounge</p>
+        <h2>Poker Is Not Built Yet</h2>
+        <p class="hero-copy">
+          The chooser is in place, but this repo only includes the playable pool
+          table right now. You can jump into pool or head back to the game
+          picker.
+        </p>
+        <div class="mode-action-row">
+          <button id="launchPoolBtn" class="primary-button" type="button">
+            Play Pool
+          </button>
+          <button id="backToMenuBtn" class="secondary-button" type="button">
+            Back
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <div id="poolApp" class="page-shell" hidden>
       <header class="hero">
         <div>
           <p class="eyebrow">Single-Player 8-Ball</p>
@@ -136,6 +187,6 @@
       </main>
     </div>
 
-    <script src="./game.js"></script>
+    <script src="./pool.js"></script>
   </body>
 </html>

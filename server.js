@@ -15,9 +15,9 @@ app.get("/", (_req, res) => {
   res.sendFile(path.join(rootDir, "index.html"));
 });
 
-app.get("/game.js", (_req, res) => {
+app.get("/pool.js", (_req, res) => {
   res.type("application/javascript");
-  res.sendFile(path.join(rootDir, "game.js"));
+  res.sendFile(path.join(rootDir, "pool.js"));
 });
 
 app.get("/styles.css", (_req, res) => {

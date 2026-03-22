@@ -1,7 +1,9 @@
 # Pool
 
 A browser-based single-player pool game with a CPU opponent, wrapped in an
-Express server for Node hosting.
+Express server for Node hosting. The app now opens on a game-select screen
+where `Pool` launches the playable table and `Poker` currently shows a
+placeholder lounge.
 
 ## Local run
 

@@ -4040,6 +4040,44 @@
   }
 
   window.addEventListener("DOMContentLoaded", () => {
-    new PoolGame();
+    const modeScreen = document.getElementById("modeScreen");
+    const pokerPlaceholder = document.getElementById("pokerPlaceholder");
+    const poolApp = document.getElementById("poolApp");
+    const choosePoolBtn = document.getElementById("choosePoolBtn");
+    const choosePokerBtn = document.getElementById("choosePokerBtn");
+    const launchPoolBtn = document.getElementById("launchPoolBtn");
+    const backToMenuBtn = document.getElementById("backToMenuBtn");
+
+    let game = null;
+
+    const launchPool = () => {
+      modeScreen.hidden = true;
+      pokerPlaceholder.hidden = true;
+      poolApp.hidden = false;
+
+      if (!game) {
+        game = new PoolGame();
+        return;
+      }
+
+      game.resetGame();
+    };
+
+    const showPokerPlaceholder = () => {
+      modeScreen.hidden = true;
+      poolApp.hidden = true;
+      pokerPlaceholder.hidden = false;
+    };
+
+    const showModeMenu = () => {
+      modeScreen.hidden = false;
+      poolApp.hidden = true;
+      pokerPlaceholder.hidden = true;
+    };
+
+    choosePoolBtn.addEventListener("click", launchPool);
+    choosePokerBtn.addEventListener("click", showPokerPlaceholder);
+    launchPoolBtn.addEventListener("click", launchPool);
+    backToMenuBtn.addEventListener("click", showModeMenu);
   });
 })();
