@@ -6,7 +6,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
-    <title>Pool Night</title>
+    <title>Club Night</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -30,32 +30,12 @@
           </button>
 
           <button id="choosePokerBtn" class="mode-card mode-card-alt" type="button">
-            <span class="mode-tag">Coming Soon</span>
+            <span class="mode-tag">Live Now</span>
             <strong>Poker</strong>
             <span>
-              Reserved for a future card-room mode with its own table,
-              interface, and game flow.
+              Heads-up Texas Hold'em with a cinematic table, chips, betting
+              rounds, and a CPU opponent.
             </span>
-          </button>
-        </div>
-      </div>
-    </section>
-
-    <section id="pokerPlaceholder" class="mode-placeholder" hidden>
-      <div class="mode-placeholder-card">
-        <p class="eyebrow">Poker Lounge</p>
-        <h2>Poker Is Not Built Yet</h2>
-        <p class="hero-copy">
-          The chooser is in place, but this repo only includes the playable pool
-          table right now. You can jump into pool or head back to the game
-          picker.
-        </p>
-        <div class="mode-action-row">
-          <button id="launchPoolBtn" class="primary-button" type="button">
-            Play Pool
-          </button>
-          <button id="backToMenuBtn" class="secondary-button" type="button">
-            Back
           </button>
         </div>
       </div>
@@ -72,9 +52,18 @@
             8-ball rules, and a CPU opponent that plays to the same rule set.
           </p>
         </div>
-        <button id="newGameBtn" class="primary-button" type="button">
-          New Rack
-        </button>
+        <div class="header-action-row">
+          <button id="newGameBtn" class="primary-button" type="button">
+            New Rack
+          </button>
+          <button
+            id="backToMenuFromPoolBtn"
+            class="secondary-button"
+            type="button"
+          >
+            Menu
+          </button>
+        </div>
       </header>
 
       <main class="layout">
@@ -187,6 +176,140 @@
       </main>
     </div>
 
+    <div id="pokerApp" class="page-shell poker-shell" hidden>
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Heads-Up Texas Hold'em</p>
+          <h1>Poker Night</h1>
+          <p class="hero-copy">
+            A 3D-styled poker table inspired by your `assets/poker.png`
+            renders, with blinds, betting rounds, showdown hand evaluation,
+            and a CPU player across the felt.
+          </p>
+        </div>
+        <div class="header-action-row">
+          <button id="newPokerMatchBtn" class="primary-button" type="button">
+            New Match
+          </button>
+          <button
+            id="backToMenuFromPokerBtn"
+            class="secondary-button"
+            type="button"
+          >
+            Menu
+          </button>
+        </div>
+      </header>
+
+      <main class="layout poker-layout">
+        <section class="table-card poker-table-card">
+          <canvas
+            id="pokerCanvas"
+            width="1280"
+            height="760"
+            aria-label="Poker table"
+          ></canvas>
+
+          <div class="poker-action-bar">
+            <button id="pokerFoldBtn" class="secondary-button" type="button">
+              Fold
+            </button>
+            <button id="pokerCallBtn" class="secondary-button" type="button">
+              Check
+            </button>
+            <button id="pokerRaiseBtn" class="primary-button" type="button">
+              Bet
+            </button>
+            <button
+              id="pokerNextHandBtn"
+              class="secondary-button"
+              type="button"
+              hidden
+            >
+              Next Hand
+            </button>
+          </div>
+
+          <p class="table-hint">
+            This poker mode plays heads-up Texas Hold'em: two hole cards each,
+            then the flop, turn, river, and a showdown if nobody folds. Use
+            the action buttons to fold, check or call, and bet or raise.
+          </p>
+        </section>
+
+        <aside class="hud-card poker-hud-card">
+          <section class="hud-section">
+            <p class="section-label">Table</p>
+            <div class="stat-grid">
+              <div class="stat">
+                <span class="stat-label">Street</span>
+                <strong id="pokerStreetLabel">Pre-Flop</strong>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Pot</span>
+                <strong id="pokerPotLabel">$0</strong>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Button</span>
+                <strong id="pokerDealerLabel">You</strong>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Action</span>
+                <strong id="pokerActionLabel">Waiting</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="hud-section">
+            <p class="section-label">Stacks</p>
+            <div class="stat-grid">
+              <div class="stat">
+                <span class="stat-label">You</span>
+                <strong id="pokerPlayerStackLabel">$1000</strong>
+              </div>
+              <div class="stat">
+                <span class="stat-label">CPU</span>
+                <strong id="pokerCpuStackLabel">$1000</strong>
+              </div>
+              <div class="stat">
+                <span class="stat-label">To Call</span>
+                <strong id="pokerToCallLabel">$0</strong>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Bet Size</span>
+                <strong id="pokerBetSizeLabel">$20</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="hud-section">
+            <p class="section-label">Hands</p>
+            <div class="stat call-stat">
+              <span class="stat-label">Your Cards</span>
+              <strong id="pokerPlayerCardsLabel">-- --</strong>
+            </div>
+            <div class="stat call-stat poker-card-summary">
+              <span class="stat-label">Board</span>
+              <strong id="pokerBoardLabel">-- -- -- -- --</strong>
+            </div>
+            <div class="stat call-stat poker-card-summary">
+              <span class="stat-label">CPU</span>
+              <strong id="pokerCpuCardsLabel">Hidden</strong>
+            </div>
+            <p class="microcopy" id="pokerStatusLabel">
+              Post the blinds and play the hand out through showdown.
+            </p>
+          </section>
+
+          <section class="hud-section">
+            <p class="section-label">Recent Action</p>
+            <ol id="pokerEventLog" class="event-log"></ol>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <script src="./poker.js"></script>
     <script src="./pool.js"></script>
   </body>
 </html>
