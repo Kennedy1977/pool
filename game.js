@@ -211,6 +211,7 @@
     constructor() {
       this.canvas = document.getElementById("gameCanvas");
       this.ctx = this.canvas.getContext("2d");
+      this.cameraOrbit = this.createCameraOrbit();
       this.camera = this.createCamera();
 
       this.ballBuffer = document.createElement("canvas");
@@ -244,6 +245,8 @@
       };
 
       this.dragShot = null;
+      this.cameraGesture = null;
+      this.shotSetup = this.createShotSetup();
       this.eventLogEntries = [];
       this.balls = [];
       this.currentPlayer = "player";
@@ -270,8 +273,35 @@
       requestAnimationFrame((timestamp) => this.animate(timestamp));
     }
 
+    createShotSetup() {
+      return {
+        cueSelected: false,
+        targetBallNumber: null,
+      };
+    }
+
+    createCameraOrbit() {
+      const offset = subtract3(CAMERA.position, CAMERA.target);
+      const distanceToTarget = Math.hypot(offset.x, offset.y, offset.z) || 1;
+      const horizontalDistance = Math.hypot(offset.x, offset.z) || 1;
+
+      return {
+        yaw: Math.atan2(offset.x, offset.z),
+        pitch: Math.atan2(offset.y, horizontalDistance),
+        distance: distanceToTarget,
+        target: { ...CAMERA.target },
+      };
+    }
+
     createCamera() {
-      const forward = normalize3(subtract3(CAMERA.target, CAMERA.position));
+      const orbit = this.cameraOrbit || this.createCameraOrbit();
+      const horizontalDistance = Math.cos(orbit.pitch) * orbit.distance;
+      const position = {
+        x: orbit.target.x + Math.sin(orbit.yaw) * horizontalDistance,
+        y: orbit.target.y + Math.sin(orbit.pitch) * orbit.distance,
+        z: orbit.target.z + Math.cos(orbit.yaw) * horizontalDistance,
+      };
+      const forward = normalize3(subtract3(orbit.target, position));
       const right = normalize3(cross3(forward, { x: 0, y: 1, z: 0 }));
       const up = normalize3(cross3(right, forward));
       const rotation = [
@@ -282,6 +312,8 @@
 
       return {
         ...CAMERA,
+        position,
+        target: { ...orbit.target },
         right,
         up,
         forward,
@@ -290,16 +322,60 @@
       };
     }
 
+    clampCameraOrbit() {
+      this.cameraOrbit.pitch = clamp(this.cameraOrbit.pitch, 0.3, 1.18);
+      this.cameraOrbit.distance = clamp(this.cameraOrbit.distance, 640, 2200);
+      this.cameraOrbit.target.x = clamp(this.cameraOrbit.target.x, -320, 320);
+      this.cameraOrbit.target.y = clamp(this.cameraOrbit.target.y, 0, 140);
+      this.cameraOrbit.target.z = clamp(this.cameraOrbit.target.z, -220, 220);
+    }
+
+    updateCamera() {
+      this.clampCameraOrbit();
+      this.camera = this.createCamera();
+      this.refreshPointerTableCoordinates();
+    }
+
+    orbitCamera(deltaX, deltaY) {
+      this.cameraOrbit.yaw -= deltaX * 0.0055;
+      this.cameraOrbit.pitch = clamp(this.cameraOrbit.pitch + deltaY * 0.0045, 0.3, 1.18);
+      this.updateCamera();
+    }
+
+    panCamera(deltaX, deltaY) {
+      const right = normalize(this.camera.right.x, this.camera.right.z);
+      const forward = normalize(this.camera.forward.x, this.camera.forward.z);
+      const scale = this.cameraOrbit.distance / this.camera.focalLength;
+      this.cameraOrbit.target.x += (-deltaX * right.x + deltaY * forward.x) * scale * 3.2;
+      this.cameraOrbit.target.z += (-deltaX * right.y + deltaY * forward.y) * scale * 3.2;
+      this.updateCamera();
+    }
+
+    zoomCamera(deltaY) {
+      this.cameraOrbit.distance = clamp(
+        this.cameraOrbit.distance * Math.exp(deltaY * 0.0012),
+        640,
+        2200
+      );
+      this.updateCamera();
+    }
+
     bindEvents() {
       this.ui.newGameBtn.addEventListener("click", () => this.resetGame());
       this.ui.toggleSafetyBtn.addEventListener("click", () => this.togglePlayerSafety());
       this.ui.clearCallBtn.addEventListener("click", () => this.resetPlayerCall());
 
+      this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
       this.canvas.addEventListener("pointermove", (event) =>
         this.handlePointerMove(event)
       );
       this.canvas.addEventListener("pointerdown", (event) =>
         this.handlePointerDown(event)
+      );
+      this.canvas.addEventListener(
+        "wheel",
+        (event) => this.handleWheel(event),
+        { passive: false }
       );
       this.canvas.addEventListener("pointerleave", () => {
         this.pointer.inside = false;
@@ -314,6 +390,121 @@
         ballNumber: null,
         pocketIndex: null,
         safety: false,
+      };
+    }
+
+    resetShotSetup() {
+      this.shotSetup = this.createShotSetup();
+      this.dragShot = null;
+    }
+
+    selectCueBallForShot() {
+      this.shotSetup.cueSelected = true;
+      this.shotSetup.targetBallNumber = null;
+      this.statusText = this.breakShotPending
+        ? "Cue ball selected. Click a target ball, then drag back from the cue ball to break."
+        : "Cue ball selected. Click a legal target ball, then drag back from the cue ball to shoot.";
+    }
+
+    getTargetBallForShot() {
+      if (this.shotSetup.targetBallNumber === null) {
+        return null;
+      }
+
+      return this.balls.find(
+        (ball) =>
+          !ball.pocketed &&
+          ball.number === this.shotSetup.targetBallNumber &&
+          ball.number !== 0
+      ) || null;
+    }
+
+    getAimDirectionForPlayer() {
+      const cueBall = this.getCueBall();
+      const targetBall = this.getTargetBallForShot();
+      if (targetBall) {
+        return normalize(targetBall.x - cueBall.x, targetBall.y - cueBall.y);
+      }
+
+      if (!this.shotSetup.cueSelected || !this.pointer.tableValid) {
+        return null;
+      }
+
+      return normalize(this.pointer.tableX - cueBall.x, this.pointer.tableY - cueBall.y);
+    }
+
+    getDragPullDistance() {
+      if (!this.dragShot) {
+        return 0;
+      }
+
+      const cueBall = this.getCueBall();
+      if (this.dragShot.lockedDirection) {
+        return Math.max(
+          0,
+          (cueBall.x - this.dragShot.currentTableX) * this.dragShot.lockedDirection.x +
+            (cueBall.y - this.dragShot.currentTableY) * this.dragShot.lockedDirection.y
+        );
+      }
+
+      return distance(
+        cueBall.x,
+        cueBall.y,
+        this.dragShot.currentTableX,
+        this.dragShot.currentTableY
+      );
+    }
+
+    isLegalTargetBallForShot(number) {
+      if (this.breakShotPending) {
+        return number >= 1 && number <= 15;
+      }
+
+      return this.isLegalCalledBall(number, "player");
+    }
+
+    selectTargetBallForShot(number) {
+      if (!this.isLegalTargetBallForShot(number)) {
+        this.statusText = "That is not a legal target ball right now.";
+        return;
+      }
+
+      this.shotSetup.cueSelected = true;
+      this.shotSetup.targetBallNumber = number;
+
+      if (!this.breakShotPending) {
+        this.selectPlayerBallCall(number);
+        if (this.playerCall.pocketIndex === null) {
+          const suggestion = this.suggestPlayerCall();
+          if (suggestion && suggestion.calledBall === number) {
+            this.playerCall.pocketIndex = suggestion.calledPocketIndex;
+          }
+        }
+
+        this.statusText =
+          this.playerCall.pocketIndex === null
+            ? `Ball ${number} selected. Choose a pocket, then drag back from the cue ball to shoot.`
+            : `Ball ${number} to the ${POCKET_LABELS[this.playerCall.pocketIndex]} selected. Drag back from the cue ball to set power.`;
+        return;
+      }
+
+      this.statusText = `Target ball ${number} selected. Drag back from the cue ball to break.`;
+    }
+
+    refreshPointerTableCoordinates() {
+      const tablePoint = this.screenToTable(this.pointer.screenX, this.pointer.screenY);
+      this.pointer.tableValid = Boolean(tablePoint);
+      if (tablePoint) {
+        this.pointer.tableX = tablePoint.x;
+        this.pointer.tableY = tablePoint.y;
+      }
+    }
+
+    startCameraGesture(type, point) {
+      this.cameraGesture = {
+        type,
+        lastScreenX: point.x,
+        lastScreenY: point.y,
       };
     }
 
@@ -367,7 +558,7 @@
     resetPlayerCall() {
       this.playerCall = this.createEmptyCall();
       if (this.currentPlayer === "player" && this.state === "aim" && !this.breakShotPending) {
-        this.statusText = "Call a legal ball and pocket, or toggle Safety.";
+        this.statusText = "Click the cue ball, then choose a legal target ball and pocket, or toggle Safety.";
       }
       this.syncHud();
     }
@@ -402,6 +593,62 @@
           : `Ball ${this.playerCall.ballNumber} to the ${POCKET_LABELS[pocketIndex]} called.`;
     }
 
+    suggestPlayerCall() {
+      const cueBall = this.getCueBall();
+      const legalTargets = this.getLegalTargetsFor("player");
+      let targetBalls = this.balls.filter(
+        (ball) => !ball.pocketed && legalTargets.includes(ball.number)
+      );
+
+      if (this.playerCall.ballNumber !== null) {
+        const selectedBall = targetBalls.find(
+          (ball) => ball.number === this.playerCall.ballNumber
+        );
+        targetBalls = selectedBall ? [selectedBall] : [];
+      }
+
+      if (targetBalls.length === 0) {
+        return null;
+      }
+
+      const preferredPocketIndex = this.playerCall.pocketIndex;
+      const matchedPocketOption =
+        preferredPocketIndex === null
+          ? null
+          : this.findCpuPottingOption(targetBalls, cueBall, preferredPocketIndex);
+
+      const pottingOption =
+        matchedPocketOption || this.findCpuPottingOption(targetBalls, cueBall);
+      if (pottingOption) {
+        return pottingOption;
+      }
+
+      const fallbackBall = targetBalls
+        .slice()
+        .sort(
+          (first, second) =>
+            distance(cueBall.x, cueBall.y, first.x, first.y) -
+            distance(cueBall.x, cueBall.y, second.x, second.y)
+        )[0];
+
+      if (!fallbackBall) {
+        return null;
+      }
+
+      let fallbackPocketIndex = preferredPocketIndex;
+      if (fallbackPocketIndex === null) {
+        fallbackPocketIndex = POCKETS.map((pocket, pocketIndex) => ({
+          pocketIndex,
+          distance: distance(fallbackBall.x, fallbackBall.y, pocket.x, pocket.y),
+        })).sort((first, second) => first.distance - second.distance)[0].pocketIndex;
+      }
+
+      return {
+        calledBall: fallbackBall.number,
+        calledPocketIndex: fallbackPocketIndex,
+      };
+    }
+
     togglePlayerSafety() {
       if (this.currentPlayer !== "player" || this.state !== "aim" || this.breakShotPending || this.pendingDecision) {
         return;
@@ -413,7 +660,7 @@
         this.playerCall.pocketIndex = null;
         this.statusText = "Safety called. Shoot a legal safety and play will pass.";
       } else {
-        this.statusText = "Safety cleared. Call a legal ball and pocket.";
+        this.statusText = "Safety cleared. Click the cue ball, then choose a legal target ball and pocket.";
       }
       this.syncHud();
     }
@@ -435,7 +682,7 @@
         restrictedToHeadString: true,
       };
       this.placementPreview = null;
-      this.dragShot = null;
+      this.resetShotSetup();
       this.activeShot = null;
       this.pendingDecision = null;
       this.breakShotPending = true;
@@ -508,6 +755,8 @@
     }
 
     update(deltaSeconds, timestamp) {
+      this.refreshPointerTableCoordinates();
+
       if (this.state === "balls-moving") {
         let timeLeft = deltaSeconds;
         while (timeLeft > 0) {
@@ -1281,6 +1530,7 @@
 
       if (this.currentPlayer === "cpu") {
         this.playerCall = this.createEmptyCall();
+        this.resetShotSetup();
         if (!cpuPlacedFromHand) {
           this.upcomingShotRestriction = false;
         }
@@ -1291,13 +1541,14 @@
           : "CPU is studying the table.";
       } else {
         this.playerCall = this.createEmptyCall();
+        this.resetShotSetup();
         if (!this.ballInHand) {
           this.upcomingShotRestriction = false;
         }
         this.state = "aim";
         this.statusText = this.breakShotPending
-          ? "Break shot. Place the cue ball above the head string."
-          : "Call a legal ball and pocket, or toggle Safety.";
+          ? "Click the cue ball to line up the break."
+          : "Click the cue ball, then choose a legal target ball and pocket, or toggle Safety.";
       }
     }
 
@@ -1452,11 +1703,15 @@
       };
     }
 
-    findCpuPottingOption(targetBalls, cueBall) {
+    findCpuPottingOption(targetBalls, cueBall, restrictedPocketIndex = null) {
       const pottingOptions = [];
 
       for (const targetBall of targetBalls) {
         for (let pocketIndex = 0; pocketIndex < POCKETS.length; pocketIndex += 1) {
+          if (restrictedPocketIndex !== null && pocketIndex !== restrictedPocketIndex) {
+            continue;
+          }
+
           const pocket = POCKETS[pocketIndex];
           const toPocket = normalize(pocket.x - targetBall.x, pocket.y - targetBall.y);
           const ghostX = targetBall.x - toPocket.x * BALL_DIAMETER;
@@ -1702,7 +1957,7 @@
       cueBall.pocketed = false;
       cueBall.vx = direction.x * power;
       cueBall.vy = direction.y * power;
-      this.dragShot = null;
+      this.resetShotSetup();
       this.state = "balls-moving";
       this.activeShot = {
         shooter,
@@ -1794,27 +2049,42 @@
 
     handlePointerMove(event) {
       const point = this.getPointerPosition(event);
-      const tablePoint = this.screenToTable(point.x, point.y);
 
       this.pointer.screenX = point.x;
       this.pointer.screenY = point.y;
       this.pointer.inside = true;
-      this.pointer.tableValid = Boolean(tablePoint);
 
-      if (tablePoint) {
-        this.pointer.tableX = tablePoint.x;
-        this.pointer.tableY = tablePoint.y;
+      if (this.cameraGesture) {
+        const deltaX = point.x - this.cameraGesture.lastScreenX;
+        const deltaY = point.y - this.cameraGesture.lastScreenY;
+        if (this.cameraGesture.type === "pan") {
+          this.panCamera(deltaX, deltaY);
+        } else {
+          this.orbitCamera(deltaX, deltaY);
+        }
+        this.cameraGesture.lastScreenX = point.x;
+        this.cameraGesture.lastScreenY = point.y;
+      } else {
+        this.refreshPointerTableCoordinates();
       }
 
-      if (this.dragShot && tablePoint) {
-        this.dragShot.currentTableX = tablePoint.x;
-        this.dragShot.currentTableY = tablePoint.y;
+      if (this.dragShot && this.pointer.tableValid) {
+        this.dragShot.currentTableX = this.pointer.tableX;
+        this.dragShot.currentTableY = this.pointer.tableY;
       }
     }
 
     handlePointerDown(event) {
       const point = this.getPointerPosition(event);
       const tablePoint = this.screenToTable(point.x, point.y);
+      const wantsPan =
+        event.button === 1 ||
+        event.button === 2 ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey;
+      const cameraGestureType = wantsPan ? "pan" : "orbit";
 
       this.pointer.screenX = point.x;
       this.pointer.screenY = point.y;
@@ -1826,7 +2096,20 @@
         this.pointer.tableY = tablePoint.y;
       }
 
+      if (typeof event.pointerId === "number") {
+        try {
+          this.canvas.setPointerCapture(event.pointerId);
+        } catch (_error) {
+          // Ignore unsupported pointer-capture edge cases.
+        }
+      }
+
       if (this.state === "placing-cue-ball") {
+        if (event.button !== 0) {
+          this.startCameraGesture(cameraGestureType, point);
+          return;
+        }
+
         if (this.currentPlayer !== "player" || !tablePoint) {
           return;
         }
@@ -1842,8 +2125,8 @@
           this.state = "aim";
           this.playerCall = this.createEmptyCall();
           this.statusText = this.breakShotPending
-            ? "Cue ball placed. Break when ready."
-            : "Cue ball placed. Call a legal ball and pocket, or toggle Safety.";
+            ? "Cue ball placed. Click the cue ball to line up the break."
+            : "Cue ball placed. Click the cue ball, then choose a legal target ball and pocket.";
           this.addLog("You place the cue ball.");
         } else {
           this.statusText = restrictedToHeadString
@@ -1854,16 +2137,24 @@
       }
 
       if (this.state !== "aim" || this.currentPlayer !== "player" || this.winner) {
+        this.startCameraGesture(cameraGestureType, point);
         return;
       }
 
       const cueBall = this.getCueBall();
       if (cueBall.pocketed || !this.areBallsStill()) {
+        this.startCameraGesture(cameraGestureType, point);
+        return;
+      }
+
+      if (wantsPan) {
+        this.startCameraGesture("pan", point);
         return;
       }
 
       const cueProjection = this.projectBall(cueBall);
       if (!cueProjection) {
+        this.startCameraGesture("orbit", point);
         return;
       }
 
@@ -1872,33 +2163,76 @@
         cueProjection.radius * 1.9;
 
       if (cueBallHit) {
+        if (!this.shotSetup.cueSelected) {
+          this.selectCueBallForShot();
+          return;
+        }
+
         if (!this.isPlayerReadyToShoot()) {
-          this.statusText = "Call a legal ball and pocket first, or toggle Safety.";
+          this.statusText = this.breakShotPending
+            ? "Cue ball selected. Click a target ball, then drag back from the cue ball to break."
+            : "Cue ball selected. Click a legal target ball and pocket first.";
+          return;
+        }
+
+        const lockedDirection = this.getAimDirectionForPlayer();
+        if (!lockedDirection) {
+          this.statusText = "Choose a target direction before taking the shot.";
           return;
         }
 
         this.dragShot = {
           currentTableX: tablePoint ? tablePoint.x : cueBall.x,
           currentTableY: tablePoint ? tablePoint.y : cueBall.y,
+          lockedDirection,
         };
         return;
       }
 
-      if (!this.breakShotPending) {
-        const ballHit = this.getBallHitAtScreenPoint(point.x, point.y);
-        if (ballHit) {
-          this.selectPlayerBallCall(ballHit.number);
-          return;
-        }
+      if (!this.shotSetup.cueSelected) {
+        this.startCameraGesture("orbit", point);
+        return;
+      }
 
+      const ballHit = this.getBallHitAtScreenPoint(point.x, point.y);
+      if (ballHit) {
+        this.selectTargetBallForShot(ballHit.number);
+        return;
+      }
+
+      if (!this.breakShotPending) {
         const pocketHit = this.getPocketHitAtScreenPoint(point.x, point.y);
         if (pocketHit) {
           this.selectPlayerPocketCall(pocketHit.pocketIndex);
+          const targetBall = this.getTargetBallForShot();
+          if (targetBall) {
+            this.statusText = `Ball ${targetBall.number} to the ${POCKET_LABELS[pocketHit.pocketIndex]} selected. Drag back from the cue ball to set power.`;
+          }
+          return;
         }
       }
+
+      this.statusText = this.breakShotPending
+        ? "Cue ball selected. Click a target ball, then drag back from the cue ball to break."
+        : this.isPlayerReadyToShoot()
+          ? "Drag back from the cue ball to set power, or click a different ball or pocket to adjust the shot."
+          : "Cue ball selected. Click a legal target ball and pocket first.";
     }
 
     handlePointerUp(event) {
+      if (typeof event.pointerId === "number") {
+        try {
+          this.canvas.releasePointerCapture(event.pointerId);
+        } catch (_error) {
+          // Ignore unsupported pointer-capture edge cases.
+        }
+      }
+
+      if (this.cameraGesture) {
+        this.cameraGesture = null;
+        return;
+      }
+
       if (!this.dragShot || this.state !== "aim" || this.currentPlayer !== "player") {
         return;
       }
@@ -1911,12 +2245,16 @@
       }
 
       const cueBall = this.getCueBall();
-      const shotVectorX = cueBall.x - this.dragShot.currentTableX;
-      const shotVectorY = cueBall.y - this.dragShot.currentTableY;
-      const pullDistance = Math.hypot(shotVectorX, shotVectorY);
+      const lockedDirection = this.dragShot.lockedDirection;
+      const pullDistance = this.getDragPullDistance();
 
       if (pullDistance >= 14) {
-        const direction = normalize(shotVectorX, shotVectorY);
+        const direction =
+          lockedDirection ||
+          normalize(
+            cueBall.x - this.dragShot.currentTableX,
+            cueBall.y - this.dragShot.currentTableY
+          );
         const power = clamp(pullDistance * 5.2, MIN_SHOT_SPEED, MAX_SHOT_SPEED);
         this.shoot("player", direction, power);
         this.statusText = this.breakShotPending
@@ -1927,6 +2265,15 @@
       }
 
       this.dragShot = null;
+    }
+
+    handleWheel(event) {
+      event.preventDefault();
+      this.pointer.inside = true;
+      const point = this.getPointerPosition(event);
+      this.pointer.screenX = point.x;
+      this.pointer.screenY = point.y;
+      this.zoomCamera(event.deltaY);
     }
 
     getPointerPosition(event) {
@@ -2206,13 +2553,7 @@
 
       let power = 0;
       if (this.dragShot && this.currentPlayer === "player" && this.state === "aim") {
-        const cueBall = this.getCueBall();
-        power = distance(
-          cueBall.x,
-          cueBall.y,
-          this.dragShot.currentTableX,
-          this.dragShot.currentTableY
-        ) / 180;
+        power = this.getDragPullDistance() / 180;
       }
 
       this.ui.powerFill.style.width = `${clamp(power, 0, 1) * 100}%`;
@@ -3030,14 +3371,11 @@
         return;
       }
 
-      const direction = this.dragShot
-        ? normalize(
-            cueBall.x - this.dragShot.currentTableX,
-            cueBall.y - this.dragShot.currentTableY
-          )
-        : this.pointer.tableValid
-          ? normalize(this.pointer.tableX - cueBall.x, this.pointer.tableY - cueBall.y)
-          : null;
+      if (!this.dragShot && !this.shotSetup.cueSelected) {
+        return;
+      }
+
+      const direction = this.dragShot?.lockedDirection || this.getAimDirectionForPlayer();
 
       if (!direction) {
         return;
@@ -3045,12 +3383,7 @@
 
       const guideDistance = this.dragShot
         ? clamp(
-            distance(
-              cueBall.x,
-              cueBall.y,
-              this.dragShot.currentTableX,
-              this.dragShot.currentTableY
-            ) * 2.2,
+            this.getDragPullDistance() * 2.2,
             100,
             360
           )
@@ -3075,16 +3408,50 @@
         this.dragShot ? [10, 8] : [6, 12]
       );
 
+      const cueProjection = this.projectBall(cueBall);
+      if (cueProjection && this.shotSetup.cueSelected) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(255, 232, 158, 0.95)";
+        ctx.lineWidth = Math.max(1.5, cueProjection.radius * 0.16);
+        ctx.setLineDash([8, 6]);
+        ctx.beginPath();
+        ctx.arc(
+          cueProjection.x,
+          cueProjection.y,
+          cueProjection.radius * 1.34,
+          0,
+          Math.PI * 2
+        );
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      const targetBall = this.getTargetBallForShot();
+      if (targetBall) {
+        const targetProjection = this.projectBall(targetBall);
+        if (targetProjection) {
+          ctx.save();
+          ctx.strokeStyle = "rgba(120, 226, 255, 0.95)";
+          ctx.lineWidth = Math.max(1.4, targetProjection.radius * 0.14);
+          ctx.setLineDash([7, 6]);
+          ctx.beginPath();
+          ctx.arc(
+            targetProjection.x,
+            targetProjection.y,
+            targetProjection.radius * 1.28,
+            0,
+            Math.PI * 2
+          );
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+
       if (!this.dragShot) {
         return;
       }
 
-      const pull = distance(
-        cueBall.x,
-        cueBall.y,
-        this.dragShot.currentTableX,
-        this.dragShot.currentTableY
-      );
+      const pull = this.getDragPullDistance();
       const buttPoint = this.projectWorld(
         this.tableToWorld(
           cueBall.x - direction.x * (BALL_RADIUS + pull * 0.78),
