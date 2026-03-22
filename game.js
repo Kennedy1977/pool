@@ -18,6 +18,12 @@
     screenY: CANVAS_HEIGHT * 0.57,
   };
 
+  const ROOM = {
+    floorY: -214,
+    wallTopY: 468,
+    wallInset: 420,
+  };
+
   const BALL_RADIUS = 12;
   const BALL_DIAMETER = BALL_RADIUS * 2;
   const BALL_MASS = 1;
@@ -33,6 +39,7 @@
   const CPU_THINK_TIME_MS = 1150;
   const SURFACE_Y = 0;
   const BALL_CENTER_Y = BALL_RADIUS;
+  const HEAD_STRING_X = TABLE.width * 0.25;
 
   const BALL_COLORS = {
     1: "#f5d44a",
@@ -63,6 +70,15 @@
     { x: 0, y: TABLE.height, radius: POCKET_RADIUS_CORNER },
     { x: TABLE.width / 2, y: TABLE.height, radius: POCKET_RADIUS_SIDE },
     { x: TABLE.width, y: TABLE.height, radius: POCKET_RADIUS_CORNER },
+  ];
+
+  const POCKET_LABELS = [
+    "top-left",
+    "top-center",
+    "top-right",
+    "bottom-left",
+    "bottom-center",
+    "bottom-right",
   ];
 
   function clamp(value, min, max) {
@@ -210,6 +226,12 @@
         cpuCountLabel: document.getElementById("cpuCountLabel"),
         powerFill: document.getElementById("powerFill"),
         eventLog: document.getElementById("eventLog"),
+        callLabel: document.getElementById("callLabel"),
+        toggleSafetyBtn: document.getElementById("toggleSafetyBtn"),
+        clearCallBtn: document.getElementById("clearCallBtn"),
+        decisionSection: document.getElementById("decisionSection"),
+        decisionPrompt: document.getElementById("decisionPrompt"),
+        decisionButtons: document.getElementById("decisionButtons"),
       };
 
       this.pointer = {
@@ -233,6 +255,12 @@
       this.ballInHand = null;
       this.placementPreview = null;
       this.activeShot = null;
+      this.breakShotPending = true;
+      this.breaker = "player";
+      this.playerCall = this.createEmptyCall();
+      this.pendingDecision = null;
+      this.upcomingShotRestriction = false;
+      this.decisionRenderKey = "";
       this.cpuShotAt = 0;
       this.idleTimer = 0;
       this.lastTimestamp = 0;
@@ -264,6 +292,8 @@
 
     bindEvents() {
       this.ui.newGameBtn.addEventListener("click", () => this.resetGame());
+      this.ui.toggleSafetyBtn.addEventListener("click", () => this.togglePlayerSafety());
+      this.ui.clearCallBtn.addEventListener("click", () => this.resetPlayerCall());
 
       this.canvas.addEventListener("pointermove", (event) =>
         this.handlePointerMove(event)
@@ -279,23 +309,150 @@
       );
     }
 
+    createEmptyCall() {
+      return {
+        ballNumber: null,
+        pocketIndex: null,
+        safety: false,
+      };
+    }
+
+    isPlayerReadyToShoot() {
+      if (this.breakShotPending) {
+        return true;
+      }
+
+      if (this.playerCall.safety) {
+        return true;
+      }
+
+      return (
+        this.playerCall.ballNumber !== null &&
+        this.playerCall.pocketIndex !== null &&
+        this.isLegalCalledBall(this.playerCall.ballNumber, "player")
+      );
+    }
+
+    describePlayerCall() {
+      if (this.breakShotPending) {
+        return "Break shot. No call required.";
+      }
+
+      if (this.currentPlayer !== "player" || this.state === "cpu-thinking") {
+        return "CPU is handling its own called shot.";
+      }
+
+      if (this.playerCall.safety) {
+        return "Safety called. Any pocketed balls stay down and the turn passes.";
+      }
+
+      if (
+        this.playerCall.ballNumber !== null &&
+        this.playerCall.pocketIndex !== null
+      ) {
+        return `Ball ${this.playerCall.ballNumber} to the ${POCKET_LABELS[this.playerCall.pocketIndex]}.`;
+      }
+
+      if (this.playerCall.ballNumber !== null) {
+        return `Ball ${this.playerCall.ballNumber} selected. Choose a pocket.`;
+      }
+
+      if (this.playerCall.pocketIndex !== null) {
+        return `Pocket ${POCKET_LABELS[this.playerCall.pocketIndex]} selected. Choose a legal ball.`;
+      }
+
+      return "No call selected. Click a legal ball, click a pocket, then shoot.";
+    }
+
+    resetPlayerCall() {
+      this.playerCall = this.createEmptyCall();
+      if (this.currentPlayer === "player" && this.state === "aim" && !this.breakShotPending) {
+        this.statusText = "Call a legal ball and pocket, or toggle Safety.";
+      }
+      this.syncHud();
+    }
+
+    selectPlayerBallCall(number) {
+      if (!this.isLegalCalledBall(number, "player")) {
+        this.statusText = "That ball is not a legal called object right now.";
+        return;
+      }
+
+      this.playerCall.safety = false;
+      this.playerCall.ballNumber = number;
+      if (
+        this.playerCall.pocketIndex !== null &&
+        !POCKET_LABELS[this.playerCall.pocketIndex]
+      ) {
+        this.playerCall.pocketIndex = null;
+      }
+
+      this.statusText =
+        this.playerCall.pocketIndex === null
+          ? `Ball ${number} selected. Choose a pocket.`
+          : `Ball ${number} to the ${POCKET_LABELS[this.playerCall.pocketIndex]} called.`;
+    }
+
+    selectPlayerPocketCall(pocketIndex) {
+      this.playerCall.safety = false;
+      this.playerCall.pocketIndex = pocketIndex;
+      this.statusText =
+        this.playerCall.ballNumber === null
+          ? `Pocket ${POCKET_LABELS[pocketIndex]} selected. Choose a legal ball.`
+          : `Ball ${this.playerCall.ballNumber} to the ${POCKET_LABELS[pocketIndex]} called.`;
+    }
+
+    togglePlayerSafety() {
+      if (this.currentPlayer !== "player" || this.state !== "aim" || this.breakShotPending || this.pendingDecision) {
+        return;
+      }
+
+      this.playerCall.safety = !this.playerCall.safety;
+      if (this.playerCall.safety) {
+        this.playerCall.ballNumber = null;
+        this.playerCall.pocketIndex = null;
+        this.statusText = "Safety called. Shoot a legal safety and play will pass.";
+      } else {
+        this.statusText = "Safety cleared. Call a legal ball and pocket.";
+      }
+      this.syncHud();
+    }
+
     resetGame() {
+      this.eventLogEntries = [];
+      this.startRack("player", "New rack. You break.");
+      this.syncHud();
+    }
+
+    startRack(breaker, logMessage = null) {
       this.balls = this.createRack();
-      this.currentPlayer = "player";
+      this.currentPlayer = breaker;
+      this.breaker = breaker;
       this.playerGroup = null;
       this.cpuGroup = null;
-      this.ballInHand = null;
+      this.ballInHand = {
+        player: breaker,
+        restrictedToHeadString: true,
+      };
       this.placementPreview = null;
       this.dragShot = null;
       this.activeShot = null;
-      this.state = "aim";
+      this.pendingDecision = null;
+      this.breakShotPending = true;
+      this.playerCall = this.createEmptyCall();
+      this.upcomingShotRestriction = false;
+      this.state = breaker === "player" ? "placing-cue-ball" : "cpu-thinking";
       this.winner = null;
-      this.statusText = "Break the rack. Drag backward from the cue ball.";
+      this.statusText =
+        breaker === "player"
+          ? "Break shot. Place the cue ball above the head string."
+          : "CPU prepares the break.";
       this.cpuShotAt = 0;
       this.idleTimer = 0;
-      this.eventLogEntries = [];
-      this.addLog("New rack. You break.");
-      this.syncHud();
+      if (logMessage) {
+        this.addLog(logMessage);
+      }
+      this.prepareNextTurn();
     }
 
     createRack() {
@@ -374,11 +531,14 @@
       }
 
       if (this.state === "placing-cue-ball" && this.pointer.tableValid) {
+        const restrictedToHeadString = Boolean(
+          this.ballInHand && this.ballInHand.restrictedToHeadString
+        );
         const clamped = this.clampPointToTable(this.pointer.tableX, this.pointer.tableY);
         this.placementPreview = {
           x: clamped.x,
           y: clamped.y,
-          valid: this.isCuePlacementValid(clamped.x, clamped.y),
+          valid: this.isCuePlacementValid(clamped.x, clamped.y, restrictedToHeadString),
         };
       }
 
@@ -397,6 +557,16 @@
         ball.y += ball.vy * deltaSeconds;
         ball.rotX += (ball.y - previousY) / BALL_RADIUS;
         ball.rotZ -= (ball.x - previousX) / BALL_RADIUS;
+
+        if (
+          this.activeShot &&
+          this.activeShot.restrictedToHeadString &&
+          ball.number === 0 &&
+          !this.activeShot.firstHit &&
+          ball.x > HEAD_STRING_X
+        ) {
+          this.activeShot.cueCrossedHeadString = true;
+        }
       }
 
       for (const ball of this.balls) {
@@ -460,9 +630,10 @@
     }
 
     checkPocket(ball) {
-      for (const pocket of POCKETS) {
+      for (let pocketIndex = 0; pocketIndex < POCKETS.length; pocketIndex += 1) {
+        const pocket = POCKETS[pocketIndex];
         if (distance(ball.x, ball.y, pocket.x, pocket.y) <= pocket.radius) {
-          this.pocketBall(ball);
+          this.pocketBall(ball, pocketIndex);
           return true;
         }
       }
@@ -470,13 +641,17 @@
       return false;
     }
 
-    pocketBall(ball) {
+    pocketBall(ball, pocketIndex) {
       ball.pocketed = true;
       ball.vx = 0;
       ball.vy = 0;
 
       if (this.activeShot) {
         this.activeShot.pocketed.push(ball.number);
+        this.activeShot.pocketEvents.push({
+          number: ball.number,
+          pocketIndex,
+        });
         if (ball.number === 0) {
           this.activeShot.cueBallPocketed = true;
         }
@@ -513,6 +688,12 @@
 
       if (touchedRail && this.activeShot) {
         this.activeShot.anyRail = true;
+        if (this.activeShot.firstHit) {
+          this.activeShot.railAfterContact = true;
+        }
+        if (this.activeShot.isBreak && ball.number !== 0) {
+          this.activeShot.railContactBalls.add(ball.number);
+        }
       }
     }
 
@@ -550,6 +731,7 @@
       ) {
         const objectBall = firstBall.number === 0 ? secondBall : firstBall;
         this.activeShot.firstHit = objectBall.number;
+        this.activeShot.firstHitWasAboveHeadString = objectBall.x < HEAD_STRING_X;
       }
 
       const impulse = (-(1 + BALL_RESTITUTION) * speedAlongNormal) / (2 / BALL_MASS);
@@ -572,6 +754,470 @@
       });
     }
 
+    isTemporaryEightBallAvailable() {
+      return (
+        !this.playerGroup &&
+        !this.cpuGroup &&
+        (this.remainingBallsForGroup("solids") === 0 ||
+          this.remainingBallsForGroup("stripes") === 0)
+      );
+    }
+
+    getHeadStringFoulReason(shot, breakShotLabel) {
+      if (!shot.restrictedToHeadString) {
+        return "";
+      }
+
+      if (shot.cueStartX >= HEAD_STRING_X) {
+        return "Cue ball was not placed above the head string.";
+      }
+
+      if (!shot.cueCrossedHeadString && (!shot.firstHit || shot.firstHitWasAboveHeadString)) {
+        return breakShotLabel
+          ? "Cue ball failed to break out of the head string."
+          : "Cue ball failed to play out of the head string.";
+      }
+
+      return "";
+    }
+
+    getBreakFoulReason(shot) {
+      const headStringFoul = this.getHeadStringFoulReason(shot, true);
+      if (headStringFoul) {
+        return headStringFoul;
+      }
+
+      if (shot.cueBallPocketed) {
+        return "Scratch on the break.";
+      }
+
+      return "";
+    }
+
+    getStandardFoulReason(shot, legalTargets) {
+      const headStringFoul = this.getHeadStringFoulReason(shot, false);
+      if (headStringFoul) {
+        return headStringFoul;
+      }
+
+      if (!shot.firstHit) {
+        return "No object ball was struck.";
+      }
+
+      if (!legalTargets.includes(shot.firstHit)) {
+        return "Wrong first contact.";
+      }
+
+      const anyObjectBallPocketed = shot.pocketEvents.some((event) => event.number !== 0);
+      if (!anyObjectBallPocketed && !shot.railAfterContact) {
+        return "No ball reached a rail after contact.";
+      }
+
+      if (shot.cueBallPocketed) {
+        return "Scratch.";
+      }
+
+      return "";
+    }
+
+    didShotMakeCalledBall(shot) {
+      if (shot.safety || shot.calledBall === null || shot.calledPocketIndex === null) {
+        return false;
+      }
+
+      return shot.pocketEvents.some(
+        (event) =>
+          event.number === shot.calledBall &&
+          event.pocketIndex === shot.calledPocketIndex
+      );
+    }
+
+    respotEightBall() {
+      const eightBall = this.balls.find((ball) => ball.number === 8);
+      if (!eightBall) {
+        return;
+      }
+
+      const footSpotX = TABLE.width * 0.72;
+      const footSpotY = TABLE.height * 0.5;
+
+      const candidates = [];
+      for (let offset = 0; offset <= TABLE.width * 0.28; offset += 6) {
+        candidates.push({ x: footSpotX + offset, y: footSpotY });
+      }
+      for (let offset = 6; offset <= TABLE.width * 0.48; offset += 6) {
+        candidates.push({ x: footSpotX - offset, y: footSpotY });
+      }
+
+      const placement =
+        candidates.find((candidate) => this.isCuePlacementValidForSpot(candidate.x, candidate.y, 8)) ||
+        { x: footSpotX, y: footSpotY };
+
+      eightBall.pocketed = false;
+      eightBall.x = placement.x;
+      eightBall.y = placement.y;
+      eightBall.vx = 0;
+      eightBall.vy = 0;
+    }
+
+    isCuePlacementValidForSpot(x, y, ignoredNumber) {
+      if (!this.isPointInsidePlayableArea(x, y, BALL_RADIUS)) {
+        return false;
+      }
+
+      for (const ball of this.balls) {
+        if (ball.number === ignoredNumber || ball.pocketed) {
+          continue;
+        }
+
+        if (distance(x, y, ball.x, ball.y) < BALL_DIAMETER + 1.5) {
+          return false;
+        }
+      }
+
+      return true;
+    }
+
+    rerackAfterBreak(nextBreaker, logMessage) {
+      this.startRack(nextBreaker, logMessage);
+    }
+
+    setPendingDecision(prompt, options) {
+      this.pendingDecision = { prompt, options };
+      this.state = "decision";
+      this.syncHud();
+    }
+
+    clearPendingDecision() {
+      this.pendingDecision = null;
+      this.decisionRenderKey = "";
+    }
+
+    resolveBreakShot(shot, shooter, opponent) {
+      const objectBallPocketed = shot.pocketEvents.some(
+        (event) => event.number !== 0 && event.number !== 8
+      );
+      const eightBallPocketed = shot.pocketEvents.some((event) => event.number === 8);
+      const foulReason = this.getBreakFoulReason(shot);
+      const foul = Boolean(foulReason);
+      const legalBreak = objectBallPocketed || shot.railContactBalls.size >= 4;
+
+      this.resetPlayerCall();
+
+      if (eightBallPocketed && foul) {
+        this.respotEightBall();
+        const logMessage = `${this.nameFor(shooter)} pockets the 8-ball on a foul break.`;
+        this.addLog(logMessage);
+
+        if (opponent === "cpu") {
+          const option = this.evaluateCpuBreakChoice([
+            {
+              score: 70,
+              action: () => {
+                this.currentPlayer = opponent;
+                this.ballInHand = {
+                  player: opponent,
+                  restrictedToHeadString: true,
+                };
+                this.breakShotPending = false;
+                this.statusText = "8-ball spotted. CPU has cue-ball in hand above the head string.";
+                this.prepareNextTurn();
+              },
+            },
+            {
+              score: 45,
+              action: () =>
+                this.rerackAfterBreak(opponent, "CPU chooses to re-break after the foul break."),
+            },
+          ]);
+          option.action();
+          return;
+        }
+
+        this.currentPlayer = opponent;
+        this.setPendingDecision("Foul break with the 8-ball pocketed. Choose the restart.", [
+          {
+            label: "Spot 8 and take cue ball in hand",
+            action: () => {
+              this.clearPendingDecision();
+              this.ballInHand = {
+                player: opponent,
+                restrictedToHeadString: true,
+              };
+              this.breakShotPending = false;
+              this.statusText = "8-ball spotted. You have cue-ball in hand above the head string.";
+              this.prepareNextTurn();
+            },
+          },
+          {
+            label: "Re-rack and break",
+            action: () => {
+              this.clearPendingDecision();
+              this.rerackAfterBreak(opponent, "You choose to re-break after the foul break.");
+            },
+          },
+        ]);
+        return;
+      }
+
+      if (eightBallPocketed) {
+        this.respotEightBall();
+        this.addLog(`${this.nameFor(shooter)} pockets the 8-ball on the break.`);
+
+        if (shooter === "cpu") {
+          const option = this.evaluateCpuBreakChoice([
+            {
+              score: this.evaluateOpenTableForCpu() + 15,
+              action: () => {
+                this.currentPlayer = shooter;
+                this.ballInHand = null;
+                this.breakShotPending = false;
+                this.statusText = "8-ball spotted after the break. Table open.";
+                this.prepareNextTurn();
+              },
+            },
+            {
+              score: 55,
+              action: () =>
+                this.rerackAfterBreak(shooter, "CPU chooses to re-break after pocketing the 8-ball."),
+            },
+          ]);
+          option.action();
+          return;
+        }
+
+        this.currentPlayer = shooter;
+        this.setPendingDecision("You pocketed the 8-ball on a legal break. Choose what happens next.", [
+          {
+            label: "Spot 8 and continue",
+            action: () => {
+              this.clearPendingDecision();
+              this.ballInHand = null;
+              this.breakShotPending = false;
+              this.statusText = "8-ball spotted after the break. Table open.";
+              this.prepareNextTurn();
+            },
+          },
+          {
+            label: "Re-rack and break again",
+            action: () => {
+              this.clearPendingDecision();
+              this.rerackAfterBreak(shooter, "You choose to re-break after pocketing the 8-ball.");
+            },
+          },
+        ]);
+        return;
+      }
+
+      if (foul) {
+        this.addLog(`${this.nameFor(shooter)} fouls on the break. ${foulReason}`);
+
+        if (opponent === "cpu") {
+          const option = this.evaluateCpuBreakChoice([
+            {
+              score: this.evaluateOpenTableForCpu() - 10,
+              action: () => {
+                this.currentPlayer = opponent;
+                this.ballInHand = null;
+                this.breakShotPending = false;
+                this.statusText = "CPU accepts the table after the break foul.";
+                this.prepareNextTurn();
+              },
+            },
+            {
+              score: this.evaluateOpenTableForCpu() + 20,
+              action: () => {
+                this.currentPlayer = opponent;
+                this.ballInHand = {
+                  player: opponent,
+                  restrictedToHeadString: true,
+                };
+                this.breakShotPending = false;
+                this.statusText = "CPU takes cue-ball in hand above the head string.";
+                this.prepareNextTurn();
+              },
+            },
+          ]);
+          option.action();
+          return;
+        }
+
+        this.currentPlayer = opponent;
+        this.setPendingDecision("Break foul. Choose whether to accept the table or take cue-ball in hand above the head string.", [
+          {
+            label: "Accept table",
+            action: () => {
+              this.clearPendingDecision();
+              this.ballInHand = null;
+              this.breakShotPending = false;
+              this.statusText = "You accept the table after the break foul.";
+              this.prepareNextTurn();
+            },
+          },
+          {
+            label: "Cue ball in hand",
+            action: () => {
+              this.clearPendingDecision();
+              this.ballInHand = {
+                player: opponent,
+                restrictedToHeadString: true,
+              };
+              this.breakShotPending = false;
+              this.statusText = "Cue ball in hand above the head string.";
+              this.prepareNextTurn();
+            },
+          },
+        ]);
+        return;
+      }
+
+      if (!legalBreak) {
+        this.addLog(`${this.nameFor(shooter)} makes an illegal break.`);
+
+        if (opponent === "cpu") {
+          const option = this.evaluateCpuBreakChoice([
+            {
+              score: this.evaluateOpenTableForCpu(),
+              action: () => {
+                this.currentPlayer = opponent;
+                this.ballInHand = null;
+                this.breakShotPending = false;
+                this.statusText = "CPU accepts the table after the illegal break.";
+                this.prepareNextTurn();
+              },
+            },
+            {
+              score: 68,
+              action: () =>
+                this.rerackAfterBreak(opponent, "CPU chooses to re-rack and take the break."),
+            },
+            {
+              score: 44,
+              action: () =>
+                this.rerackAfterBreak(shooter, "CPU chooses to make the breaker break again."),
+            },
+          ]);
+          option.action();
+          return;
+        }
+
+        this.currentPlayer = opponent;
+        this.setPendingDecision("Illegal break. Choose how to restart the rack.", [
+          {
+            label: "Accept table",
+            action: () => {
+              this.clearPendingDecision();
+              this.ballInHand = null;
+              this.breakShotPending = false;
+              this.statusText = "You accept the table after the illegal break.";
+              this.prepareNextTurn();
+            },
+          },
+          {
+            label: "Re-rack and break",
+            action: () => {
+              this.clearPendingDecision();
+              this.rerackAfterBreak(opponent, "You choose to re-rack and take the break.");
+            },
+          },
+          {
+            label: "Make breaker break again",
+            action: () => {
+              this.clearPendingDecision();
+              this.rerackAfterBreak(shooter, "You make the breaker break again.");
+            },
+          },
+        ]);
+        return;
+      }
+
+      this.breakShotPending = false;
+      this.ballInHand = null;
+      if (objectBallPocketed) {
+        this.currentPlayer = shooter;
+        this.statusText = `${this.nameFor(shooter)} makes a legal break. Table open.`;
+      } else {
+        this.currentPlayer = opponent;
+        this.statusText = `Legal break. Table open for ${this.nameFor(opponent)}.`;
+      }
+      this.prepareNextTurn();
+    }
+
+    resolveStandardShot(shot, shooter, opponent) {
+      const legalTargets = this.getLegalTargetsFor(shooter);
+      const foulReason = this.getStandardFoulReason(shot, legalTargets);
+      const foul = Boolean(foulReason);
+      const calledShotMade = this.didShotMakeCalledBall(shot);
+      const eightBallEvent = shot.pocketEvents.find((event) => event.number === 8);
+
+      if (eightBallEvent) {
+        const eightCalledCorrectly =
+          shot.calledBall === 8 && shot.calledPocketIndex === eightBallEvent.pocketIndex;
+        const readyForEight = this.isOnFinalBlack(shooter);
+
+        let lossReason = "";
+        if (foul) {
+          lossReason = "pocketing the 8-ball and fouling";
+        } else if (!readyForEight) {
+          lossReason = "pocketing the 8-ball before clearing the group";
+        } else if (!eightCalledCorrectly) {
+          lossReason = "pocketing the 8-ball in an uncalled pocket";
+        }
+
+        if (lossReason) {
+          this.endGame(
+            opponent,
+            `${this.nameFor(opponent)} wins. ${this.nameFor(shooter)} loses by ${lossReason}.`
+          );
+          return;
+        }
+
+        this.endGame(shooter, `${this.nameFor(shooter)} calls and pockets the 8-ball.`);
+        return;
+      }
+
+      if (!this.playerGroup && !this.cpuGroup && !foul && calledShotMade && shot.calledBall !== null) {
+        const assignedGroup = this.groupForBall(shot.calledBall);
+        if (assignedGroup) {
+          this.assignGroups(shooter, assignedGroup);
+          this.addLog(
+            `${this.nameFor(shooter)} claims ${this.labelForGroup(assignedGroup).toLowerCase()}.`
+          );
+        }
+      }
+
+      if (shot.pocketEvents.some((event) => event.number !== 0)) {
+        const numbers = shot.pocketEvents
+          .filter((event) => event.number !== 0)
+          .map((event) => event.number);
+        this.addLog(`${this.nameFor(shooter)} pockets ${numbers.join(", ")}.`);
+      }
+
+      if (foul) {
+        this.addLog(`${this.nameFor(shooter)} fouls. ${foulReason}`);
+        this.currentPlayer = opponent;
+        this.ballInHand = {
+          player: opponent,
+          restrictedToHeadString: false,
+        };
+        this.statusText = `${this.nameFor(shooter)} fouled. ${this.nameFor(opponent)} has cue-ball in hand.`;
+      } else if (shot.safety) {
+        this.currentPlayer = opponent;
+        this.ballInHand = null;
+        this.statusText = `${this.nameFor(shooter)} calls safety. ${this.nameFor(opponent)} to shoot.`;
+      } else if (calledShotMade) {
+        this.currentPlayer = shooter;
+        this.ballInHand = null;
+        this.statusText = `${this.nameFor(shooter)} pockets the called shot.`;
+      } else {
+        this.currentPlayer = opponent;
+        this.ballInHand = null;
+        this.statusText = `Called shot missed. ${this.nameFor(opponent)} to shoot.`;
+      }
+
+      this.prepareNextTurn();
+    }
+
     finishShot() {
       const shot = this.activeShot;
       this.activeShot = null;
@@ -584,84 +1230,12 @@
 
       const shooter = shot.shooter;
       const opponent = shooter === "player" ? "cpu" : "player";
-      const legalTargets = this.getLegalTargetsFor(shooter);
-      const pocketed = shot.pocketed.filter((number) => number !== 0);
-      const firstGroupPocketed = pocketed.find((number) => number !== 8);
-
-      let foul = false;
-      let foulReason = "";
-
-      if (!shot.firstHit) {
-        foul = true;
-        foulReason = "No object ball was struck.";
-      } else if (!legalTargets.includes(shot.firstHit)) {
-        foul = true;
-        foulReason = "Wrong first contact.";
-      } else if (shot.cueBallPocketed) {
-        foul = true;
-        foulReason = "Scratch.";
-      }
-
-      const eightBallPocketed = pocketed.includes(8);
-      if (eightBallPocketed) {
-        const readyForEight = this.isOnFinalBlack(shooter);
-        if (!readyForEight || foul) {
-          this.endGame(
-            opponent,
-            `${this.nameFor(opponent)} wins. ${this.nameFor(shooter)} lost on the 8-ball.`
-          );
-          return;
-        }
-
-        this.endGame(shooter, `${this.nameFor(shooter)} sinks the 8-ball for the win.`);
+      if (shot.isBreak) {
+        this.resolveBreakShot(shot, shooter, opponent);
         return;
       }
 
-      if (!this.playerGroup && !this.cpuGroup && !foul && firstGroupPocketed) {
-        const assignedGroup = this.groupForBall(firstGroupPocketed);
-        this.assignGroups(shooter, assignedGroup);
-        this.addLog(
-          `${this.nameFor(shooter)} claims ${this.labelForGroup(assignedGroup).toLowerCase()}.`
-        );
-      }
-
-      let keepsTurn = false;
-
-      if (!foul) {
-        if (this.playerGroup && this.cpuGroup) {
-          const shooterGroup = this.groupForPlayer(shooter);
-          keepsTurn = pocketed.some(
-            (number) => this.groupForBall(number) === shooterGroup
-          );
-        } else {
-          keepsTurn = pocketed.some((number) => number !== 8);
-        }
-      }
-
-      if (pocketed.length > 0) {
-        this.addLog(`${this.nameFor(shooter)} pockets ${pocketed.join(", ")}.`);
-      }
-
-      if (foul) {
-        this.addLog(`${this.nameFor(shooter)} fouls. ${foulReason}`);
-        this.statusText = `${this.nameFor(shooter)} fouled. ${this.nameFor(opponent)} has ball in hand.`;
-        this.currentPlayer = opponent;
-        this.ballInHand = opponent;
-      } else if (keepsTurn) {
-        this.currentPlayer = shooter;
-        this.ballInHand = null;
-        this.statusText = `${this.nameFor(shooter)} stays at the table.`;
-      } else {
-        this.currentPlayer = opponent;
-        this.ballInHand = null;
-        this.statusText = `${this.nameFor(opponent)} to shoot.`;
-      }
-
-      if (shot.cueBallPocketed) {
-        this.getCueBall().pocketed = true;
-      }
-
-      this.prepareNextTurn();
+      this.resolveStandardShot(shot, shooter, opponent);
     }
 
     prepareNextTurn() {
@@ -670,27 +1244,60 @@
         return;
       }
 
-      if (this.ballInHand === "player") {
-        this.state = "placing-cue-ball";
-        this.placementPreview = this.findDefaultPlayerPlacement();
-        this.statusText = "Ball in hand. Click an open spot to place the cue ball.";
+      if (this.pendingDecision) {
+        this.state = "decision";
         return;
       }
 
-      if (this.ballInHand === "cpu") {
-        const placement = this.findBestCpuPlacement();
+      let cpuPlacedFromHand = false;
+
+      if (this.ballInHand && this.ballInHand.player === "player") {
+        this.state = "placing-cue-ball";
+        this.upcomingShotRestriction = this.ballInHand.restrictedToHeadString;
+        this.placementPreview = this.findDefaultPlayerPlacement(
+          this.ballInHand.restrictedToHeadString
+        );
+        this.statusText = this.ballInHand.restrictedToHeadString
+          ? "Cue ball in hand above the head string."
+          : "Cue ball in hand. Place it anywhere on the table.";
+        return;
+      }
+
+      if (this.ballInHand && this.ballInHand.player === "cpu") {
+        const restrictedToHeadString = this.ballInHand.restrictedToHeadString;
+        this.upcomingShotRestriction = restrictedToHeadString;
+        const placement = this.findBestCpuPlacement(
+          restrictedToHeadString
+        );
         this.placeCueBall(placement.x, placement.y);
         this.ballInHand = null;
-        this.addLog("CPU takes ball in hand.");
+        cpuPlacedFromHand = true;
+        this.addLog(
+          this.breakShotPending || restrictedToHeadString
+            ? "CPU places the cue ball above the head string."
+            : "CPU takes cue-ball in hand."
+        );
       }
 
       if (this.currentPlayer === "cpu") {
+        this.playerCall = this.createEmptyCall();
+        if (!cpuPlacedFromHand) {
+          this.upcomingShotRestriction = false;
+        }
         this.state = "cpu-thinking";
         this.cpuShotAt = performance.now() + CPU_THINK_TIME_MS;
-        this.statusText = "CPU is studying the table.";
+        this.statusText = this.breakShotPending
+          ? "CPU is lining up the break."
+          : "CPU is studying the table.";
       } else {
+        this.playerCall = this.createEmptyCall();
+        if (!this.ballInHand) {
+          this.upcomingShotRestriction = false;
+        }
         this.state = "aim";
-        this.statusText = "Your turn. Drag backward from the cue ball to shoot.";
+        this.statusText = this.breakShotPending
+          ? "Break shot. Place the cue ball above the head string."
+          : "Call a legal ball and pocket, or toggle Safety.";
       }
     }
 
@@ -749,7 +1356,7 @@
     isOnFinalBlack(player) {
       const group = this.groupForPlayer(player);
       if (!group) {
-        return false;
+        return this.isTemporaryEightBallAvailable();
       }
 
       return this.remainingBallsForGroup(group) === 0;
@@ -758,6 +1365,10 @@
     getLegalTargetsFor(player) {
       const group = this.groupForPlayer(player);
       if (!group) {
+        if (this.isTemporaryEightBallAvailable()) {
+          return [8];
+        }
+
         return this.balls
           .filter((ball) => !ball.pocketed && ball.number >= 1 && ball.number <= 15 && ball.number !== 8)
           .map((ball) => ball.number);
@@ -772,8 +1383,27 @@
         .map((ball) => ball.number);
     }
 
+    isLegalCalledBall(number, player) {
+      return this.getLegalTargetsFor(player).includes(number);
+    }
+
     nameFor(player) {
       return player === "player" ? "You" : "CPU";
+    }
+
+    evaluateCpuBreakChoice(options) {
+      return options.sort((first, second) => second.score - first.score)[0];
+    }
+
+    evaluateOpenTableForCpu() {
+      const cueBall = this.getCueBall();
+      const legalTargets = this.getLegalTargetsFor("cpu");
+      const targetBalls = this.balls.filter(
+        (ball) => !ball.pocketed && legalTargets.includes(ball.number)
+      );
+
+      const pottingOption = this.findCpuPottingOption(targetBalls, cueBall);
+      return pottingOption ? pottingOption.confidence * 100 : 25;
     }
 
     takeCpuTurn() {
@@ -782,11 +1412,13 @@
       }
 
       if (this.getCueBall().pocketed) {
-        const placement = this.findBestCpuPlacement();
+        const placement = this.findBestCpuPlacement(this.upcomingShotRestriction);
         this.placeCueBall(placement.x, placement.y);
       }
 
-      const choice = this.chooseCpuShot();
+      const choice = this.breakShotPending
+        ? this.chooseCpuBreakShot()
+        : this.chooseCpuShot();
       const accuracy = clamp(choice.confidence, 0.1, 1);
       const angle = Math.atan2(choice.vector.y, choice.vector.x);
       const aimError = lerp(0.075, 0.008, accuracy);
@@ -798,22 +1430,34 @@
         MAX_SHOT_SPEED
       );
 
-      this.shoot("cpu", direction, finalPower);
-      this.statusText = `CPU shoots ${choice.label}.`;
-      this.addLog(`CPU shoots ${choice.label.toLowerCase()}.`);
+      this.shoot("cpu", direction, finalPower, choice);
+      this.statusText = choice.statusText;
+      this.addLog(choice.logText);
     }
 
-    chooseCpuShot() {
+    chooseCpuBreakShot() {
       const cueBall = this.getCueBall();
-      const legalTargets = this.getLegalTargetsFor("cpu");
-      const targetBalls = this.balls.filter(
-        (ball) => !ball.pocketed && legalTargets.includes(ball.number)
-      );
+      const rackHead = this.balls.find((ball) => ball.number === 1) || this.findRackCenter();
+      const biasY = randomBetween(-18, 18);
+      return {
+        vector: normalize(rackHead.x - cueBall.x, rackHead.y + biasY - cueBall.y),
+        power: 900,
+        confidence: 0.92,
+        calledBall: null,
+        calledPocketIndex: null,
+        safety: false,
+        label: "the break",
+        statusText: "CPU breaks the rack.",
+        logText: "CPU breaks the rack.",
+      };
+    }
 
+    findCpuPottingOption(targetBalls, cueBall) {
       const pottingOptions = [];
 
       for (const targetBall of targetBalls) {
-        for (const pocket of POCKETS) {
+        for (let pocketIndex = 0; pocketIndex < POCKETS.length; pocketIndex += 1) {
+          const pocket = POCKETS[pocketIndex];
           const toPocket = normalize(pocket.x - targetBall.x, pocket.y - targetBall.y);
           const ghostX = targetBall.x - toPocket.x * BALL_DIAMETER;
           const ghostY = targetBall.y - toPocket.y * BALL_DIAMETER;
@@ -864,31 +1508,61 @@
             power: clamp(260 + cueDistance * 0.82 + pocketDistance * 0.28, 240, 760),
             confidence,
             score: confidence * 1000 - cueDistance * 0.35 - pocketDistance * 0.42,
-            label: `for the ${targetBall.number} toward a pocket`,
+            calledBall: targetBall.number,
+            calledPocketIndex: pocketIndex,
+            safety: false,
+            label: `the ${targetBall.number} to the ${POCKET_LABELS[pocketIndex]}`,
+            statusText: `CPU calls the ${targetBall.number} to the ${POCKET_LABELS[pocketIndex]}.`,
+            logText: `CPU calls the ${targetBall.number} to the ${POCKET_LABELS[pocketIndex]}.`,
           });
         }
       }
 
-      if (pottingOptions.length > 0) {
-        pottingOptions.sort((first, second) => second.score - first.score);
-        return pottingOptions[0];
+      if (pottingOptions.length === 0) {
+        return null;
       }
 
-      const directHit = this.chooseCpuFallbackShot(targetBalls, cueBall);
-      if (directHit) {
-        return directHit;
+      pottingOptions.sort((first, second) => second.score - first.score);
+      return pottingOptions[0];
+    }
+
+    chooseCpuShot() {
+      const cueBall = this.getCueBall();
+      const legalTargets = this.getLegalTargetsFor("cpu");
+      const allTargetBalls = this.balls.filter(
+        (ball) => !ball.pocketed && legalTargets.includes(ball.number)
+      );
+      const restrictedTargets = allTargetBalls.filter((ball) => ball.x >= HEAD_STRING_X);
+      const targetBalls =
+        this.upcomingShotRestriction && restrictedTargets.length > 0
+          ? restrictedTargets
+          : allTargetBalls;
+
+      const pottingOption = this.findCpuPottingOption(targetBalls, cueBall);
+      if (pottingOption) {
+        return pottingOption;
+      }
+
+      const safety = this.chooseCpuSafetyShot(targetBalls, cueBall);
+      if (safety) {
+        return safety;
       }
 
       const clusterCenter = this.findRackCenter();
       return {
         vector: normalize(clusterCenter.x - cueBall.x, clusterCenter.y - cueBall.y),
-        power: 720,
+        power: 420,
         confidence: 0.25,
-        label: "into the heart of the rack",
+        calledBall: null,
+        calledPocketIndex: null,
+        safety: true,
+        label: "a containing safety",
+        statusText: "CPU calls safety.",
+        logText: "CPU calls safety.",
       };
     }
 
-    chooseCpuFallbackShot(targetBalls, cueBall) {
+    chooseCpuSafetyShot(targetBalls, cueBall) {
       let bestShot = null;
 
       for (const targetBall of targetBalls) {
@@ -909,10 +1583,15 @@
         const confidence = clamp(0.78 - distanceToBall / 900, 0.2, 0.75);
         const shot = {
           vector: normalize(targetBall.x - cueBall.x, targetBall.y - cueBall.y),
-          power: clamp(260 + distanceToBall * 0.6, 250, 640),
+          power: clamp(240 + distanceToBall * 0.45, 250, 520),
           confidence,
           score: confidence * 100 - distanceToBall * 0.18,
-          label: `at the ${targetBall.number}`,
+          calledBall: null,
+          calledPocketIndex: null,
+          safety: true,
+          label: `a safety off the ${targetBall.number}`,
+          statusText: `CPU calls safety off the ${targetBall.number}.`,
+          logText: `CPU calls safety off the ${targetBall.number}.`,
         };
 
         if (!bestShot || shot.score > bestShot.score) {
@@ -920,7 +1599,30 @@
         }
       }
 
-      return bestShot;
+      if (bestShot) {
+        return bestShot;
+      }
+
+      if (this.upcomingShotRestriction) {
+        const crossHeadTarget = {
+          x: Math.max(HEAD_STRING_X + 80, TABLE.width * 0.6),
+          y: TABLE.height * 0.5 + randomBetween(-120, 120),
+        };
+        return {
+          vector: normalize(crossHeadTarget.x - cueBall.x, crossHeadTarget.y - cueBall.y),
+          power: 430,
+          confidence: 0.18,
+          score: 18,
+          calledBall: null,
+          calledPocketIndex: null,
+          safety: true,
+          label: "a containing safety up-table",
+          statusText: "CPU calls a containing safety.",
+          logText: "CPU calls a containing safety.",
+        };
+      }
+
+      return null;
     }
 
     findRackCenter() {
@@ -981,8 +1683,22 @@
       return distance(px, py, x1 + segmentX * t, y1 + segmentY * t);
     }
 
-    shoot(shooter, direction, power) {
+    shoot(shooter, direction, power, choice = null) {
       const cueBall = this.getCueBall();
+      const shotChoice =
+        choice ||
+        (shooter === "player"
+          ? {
+              calledBall: this.playerCall.ballNumber,
+              calledPocketIndex: this.playerCall.pocketIndex,
+              safety: this.playerCall.safety,
+            }
+          : {
+              calledBall: null,
+              calledPocketIndex: null,
+              safety: false,
+            });
+
       cueBall.pocketed = false;
       cueBall.vx = direction.x * power;
       cueBall.vy = direction.y * power;
@@ -990,15 +1706,90 @@
       this.state = "balls-moving";
       this.activeShot = {
         shooter,
+        isBreak: this.breakShotPending,
+        calledBall:
+          shotChoice.calledBall === undefined ? null : shotChoice.calledBall,
+        calledPocketIndex:
+          shotChoice.calledPocketIndex === undefined
+            ? null
+            : shotChoice.calledPocketIndex,
+        safety: Boolean(shotChoice.safety),
         firstHit: null,
         pocketed: [],
+        pocketEvents: [],
         cueBallPocketed: false,
         anyRail: false,
+        railAfterContact: false,
+        railContactBalls: new Set(),
+        restrictedToHeadString: this.breakShotPending || this.upcomingShotRestriction,
+        cueCrossedHeadString: false,
+        cueStartX: cueBall.x,
+        firstHitWasAboveHeadString: false,
       };
+      this.upcomingShotRestriction = false;
     }
 
     getCueBall() {
       return this.balls[0];
+    }
+
+    getBallHitAtScreenPoint(screenX, screenY) {
+      let best = null;
+
+      for (const ball of this.balls) {
+        if (ball.number === 0 || ball.pocketed) {
+          continue;
+        }
+
+        const projection = this.projectBall(ball);
+        if (!projection) {
+          continue;
+        }
+
+        const hitDistance = distance(screenX, screenY, projection.x, projection.y);
+        const maxDistance = projection.radius * 1.2;
+        if (hitDistance > maxDistance) {
+          continue;
+        }
+
+        if (!best || hitDistance < best.distance) {
+          best = {
+            number: ball.number,
+            distance: hitDistance,
+          };
+        }
+      }
+
+      return best;
+    }
+
+    getPocketHitAtScreenPoint(screenX, screenY) {
+      let best = null;
+
+      for (let pocketIndex = 0; pocketIndex < POCKETS.length; pocketIndex += 1) {
+        const pocket = POCKETS[pocketIndex];
+        const projection = this.projectWorld(
+          this.tableToWorld(pocket.x, pocket.y, SURFACE_Y - 3)
+        );
+        if (!projection) {
+          continue;
+        }
+
+        const hitDistance = distance(screenX, screenY, projection.x, projection.y);
+        const maxDistance = pocket.radius * projection.scale * 1.45;
+        if (hitDistance > maxDistance) {
+          continue;
+        }
+
+        if (!best || hitDistance < best.distance) {
+          best = {
+            pocketIndex,
+            distance: hitDistance,
+          };
+        }
+      }
+
+      return best;
     }
 
     handlePointerMove(event) {
@@ -1041,14 +1832,23 @@
         }
 
         const clamped = this.clampPointToTable(tablePoint.x, tablePoint.y);
-        if (this.isCuePlacementValid(clamped.x, clamped.y)) {
+        const restrictedToHeadString = Boolean(
+          this.ballInHand && this.ballInHand.restrictedToHeadString
+        );
+        if (this.isCuePlacementValid(clamped.x, clamped.y, restrictedToHeadString)) {
           this.placeCueBall(clamped.x, clamped.y);
+          this.upcomingShotRestriction = restrictedToHeadString;
           this.ballInHand = null;
           this.state = "aim";
-          this.statusText = "Cue ball placed. Take your shot.";
+          this.playerCall = this.createEmptyCall();
+          this.statusText = this.breakShotPending
+            ? "Cue ball placed. Break when ready."
+            : "Cue ball placed. Call a legal ball and pocket, or toggle Safety.";
           this.addLog("You place the cue ball.");
         } else {
-          this.statusText = "That placement is blocked. Pick a clearer lane.";
+          this.statusText = restrictedToHeadString
+            ? "That placement must be clear and above the head string."
+            : "That placement is blocked. Pick a clearer lane.";
         }
         return;
       }
@@ -1067,11 +1867,34 @@
         return;
       }
 
-      if (distance(point.x, point.y, cueProjection.x, cueProjection.y) <= cueProjection.radius * 1.9) {
+      const cueBallHit =
+        distance(point.x, point.y, cueProjection.x, cueProjection.y) <=
+        cueProjection.radius * 1.9;
+
+      if (cueBallHit) {
+        if (!this.isPlayerReadyToShoot()) {
+          this.statusText = "Call a legal ball and pocket first, or toggle Safety.";
+          return;
+        }
+
         this.dragShot = {
           currentTableX: tablePoint ? tablePoint.x : cueBall.x,
           currentTableY: tablePoint ? tablePoint.y : cueBall.y,
         };
+        return;
+      }
+
+      if (!this.breakShotPending) {
+        const ballHit = this.getBallHitAtScreenPoint(point.x, point.y);
+        if (ballHit) {
+          this.selectPlayerBallCall(ballHit.number);
+          return;
+        }
+
+        const pocketHit = this.getPocketHitAtScreenPoint(point.x, point.y);
+        if (pocketHit) {
+          this.selectPlayerPocketCall(pocketHit.pocketIndex);
+        }
       }
     }
 
@@ -1096,7 +1919,11 @@
         const direction = normalize(shotVectorX, shotVectorY);
         const power = clamp(pullDistance * 5.2, MIN_SHOT_SPEED, MAX_SHOT_SPEED);
         this.shoot("player", direction, power);
-        this.statusText = "Balls in motion.";
+        this.statusText = this.breakShotPending
+          ? "Break shot in motion."
+          : this.playerCall.safety
+            ? "Safety in motion."
+            : "Called shot in motion.";
       }
 
       this.dragShot = null;
@@ -1153,8 +1980,12 @@
       );
     }
 
-    isCuePlacementValid(x, y) {
+    isCuePlacementValid(x, y, restrictedToHeadString = false) {
       if (!this.isPointInsidePlayableArea(x, y, BALL_RADIUS)) {
+        return false;
+      }
+
+      if (restrictedToHeadString && x >= HEAD_STRING_X) {
         return false;
       }
 
@@ -1187,26 +2018,43 @@
       this.placementPreview = null;
     }
 
-    findDefaultPlayerPlacement() {
-      const placement = this.findAnyValidPlacement(TABLE.width * 0.25, TABLE.height * 0.5);
+    findDefaultPlayerPlacement(restrictedToHeadString = false) {
+      const defaultX = restrictedToHeadString ? TABLE.width * 0.18 : TABLE.width * 0.25;
+      const placement = this.findAnyValidPlacement(
+        defaultX,
+        TABLE.height * 0.5,
+        restrictedToHeadString
+      );
       return {
         x: placement.x,
         y: placement.y,
-        valid: this.isCuePlacementValid(placement.x, placement.y),
+        valid: this.isCuePlacementValid(
+          placement.x,
+          placement.y,
+          restrictedToHeadString
+        ),
       };
     }
 
-    findBestCpuPlacement() {
+    findBestCpuPlacement(restrictedToHeadString = false) {
       const legalTargets = this.getLegalTargetsFor("cpu");
-      const candidateTargets = this.balls.filter(
+      const allCandidateTargets = this.balls.filter(
         (ball) => !ball.pocketed && legalTargets.includes(ball.number)
       );
+      const restrictedTargets = allCandidateTargets.filter(
+        (ball) => ball.x >= HEAD_STRING_X
+      );
+      const candidateTargets =
+        restrictedToHeadString && restrictedTargets.length > 0
+          ? restrictedTargets
+          : allCandidateTargets;
 
       let best = null;
 
-      for (let x = 110; x <= TABLE.width * 0.48; x += 28) {
+      const maxX = restrictedToHeadString ? HEAD_STRING_X - 14 : TABLE.width * 0.48;
+      for (let x = 110; x <= maxX; x += 28) {
         for (let y = 46; y <= TABLE.height - 46; y += 22) {
-          if (!this.isCuePlacementValid(x, y)) {
+          if (!this.isCuePlacementValid(x, y, restrictedToHeadString)) {
             continue;
           }
 
@@ -1243,12 +2091,20 @@
         return best;
       }
 
-      return this.findAnyValidPlacement(TABLE.width * 0.25, TABLE.height * 0.5);
+      return this.findAnyValidPlacement(
+        restrictedToHeadString ? TABLE.width * 0.18 : TABLE.width * 0.25,
+        TABLE.height * 0.5,
+        restrictedToHeadString
+      );
     }
 
-    findAnyValidPlacement(preferredX, preferredY) {
+    findAnyValidPlacement(preferredX, preferredY, restrictedToHeadString = false) {
       const preferred = this.clampPointToTable(preferredX, preferredY);
-      if (this.isCuePlacementValid(preferred.x, preferred.y)) {
+      if (restrictedToHeadString) {
+        preferred.x = Math.min(preferred.x, HEAD_STRING_X - 8);
+      }
+
+      if (this.isCuePlacementValid(preferred.x, preferred.y, restrictedToHeadString)) {
         return preferred;
       }
 
@@ -1258,15 +2114,20 @@
             preferred.x + Math.cos(angle) * radius,
             preferred.y + Math.sin(angle) * radius
           );
-          if (this.isCuePlacementValid(candidate.x, candidate.y)) {
+          if (restrictedToHeadString) {
+            candidate.x = Math.min(candidate.x, HEAD_STRING_X - 8);
+          }
+
+          if (this.isCuePlacementValid(candidate.x, candidate.y, restrictedToHeadString)) {
             return candidate;
           }
         }
       }
 
-      for (let x = BALL_RADIUS; x <= TABLE.width - BALL_RADIUS; x += 18) {
+      const maxX = restrictedToHeadString ? Math.floor(HEAD_STRING_X - 8) : TABLE.width - BALL_RADIUS;
+      for (let x = BALL_RADIUS; x <= maxX; x += 18) {
         for (let y = BALL_RADIUS; y <= TABLE.height - BALL_RADIUS; y += 18) {
-          if (this.isCuePlacementValid(x, y)) {
+          if (this.isCuePlacementValid(x, y, restrictedToHeadString)) {
             return { x, y };
           }
         }
@@ -1296,6 +2157,52 @@
       this.ui.cpuCountLabel.textContent = this.cpuGroup
         ? `${this.remainingBallsForGroup(this.cpuGroup)}`
         : "7";
+      this.ui.callLabel.textContent = this.describePlayerCall();
+      this.ui.toggleSafetyBtn.textContent = this.playerCall.safety
+        ? "Safety: On"
+        : "Safety: Off";
+
+      const canEditCall =
+        this.currentPlayer === "player" &&
+        this.state === "aim" &&
+        !this.breakShotPending &&
+        !this.pendingDecision;
+      this.ui.toggleSafetyBtn.disabled = !canEditCall;
+      this.ui.clearCallBtn.disabled =
+        !canEditCall ||
+        (!this.playerCall.safety &&
+          this.playerCall.ballNumber === null &&
+          this.playerCall.pocketIndex === null);
+
+      if (this.pendingDecision) {
+        this.ui.decisionSection.hidden = false;
+        this.ui.decisionPrompt.textContent = this.pendingDecision.prompt;
+
+        const renderKey = JSON.stringify({
+          prompt: this.pendingDecision.prompt,
+          labels: this.pendingDecision.options.map((option) => option.label),
+        });
+
+        if (renderKey !== this.decisionRenderKey) {
+          this.ui.decisionButtons.replaceChildren(
+            ...this.pendingDecision.options.map((option) => {
+              const button = document.createElement("button");
+              button.type = "button";
+              button.className = "secondary-button";
+              button.textContent = option.label;
+              button.addEventListener("click", () => option.action());
+              return button;
+            })
+          );
+          this.decisionRenderKey = renderKey;
+        }
+      } else {
+        this.ui.decisionSection.hidden = true;
+        if (this.decisionRenderKey) {
+          this.ui.decisionButtons.replaceChildren();
+          this.decisionRenderKey = "";
+        }
+      }
 
       let power = 0;
       if (this.dragShot && this.currentPlayer === "player" && this.state === "aim") {
@@ -1440,6 +2347,10 @@
         this.drawPlacementPreview(ctx);
       }
 
+      if (this.state === "aim" && this.currentPlayer === "player" && !this.breakShotPending) {
+        this.drawCallOverlay(ctx);
+      }
+
       if (this.state === "aim" && this.currentPlayer === "player") {
         this.drawAimOverlay(ctx);
       }
@@ -1450,30 +2361,162 @@
     }
 
     drawBackdrop(ctx) {
-      const sky = ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT);
-      sky.addColorStop(0, "#17384a");
-      sky.addColorStop(0.5, "#0e2230");
-      sky.addColorStop(1, "#061019");
-      ctx.fillStyle = sky;
+      const roomLight = ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT);
+      roomLight.addColorStop(0, "#f6f7f8");
+      roomLight.addColorStop(0.62, "#e8ecef");
+      roomLight.addColorStop(1, "#d6dee5");
+      ctx.fillStyle = roomLight;
       ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-      const glow = ctx.createRadialGradient(
-        CANVAS_WIDTH * 0.5,
-        CANVAS_HEIGHT * 0.16,
-        40,
-        CANVAS_WIDTH * 0.5,
-        CANVAS_HEIGHT * 0.16,
-        420
+      const backWall = [
+        this.projectWorld(
+          this.tableToWorld(
+            -ROOM.wallInset,
+            -ROOM.wallInset,
+            ROOM.floorY
+          )
+        ),
+        this.projectWorld(
+          this.tableToWorld(
+            TABLE.width + ROOM.wallInset,
+            -ROOM.wallInset,
+            ROOM.floorY
+          )
+        ),
+        this.projectWorld(
+          this.tableToWorld(
+            TABLE.width + ROOM.wallInset,
+            -ROOM.wallInset,
+            ROOM.wallTopY
+          )
+        ),
+        this.projectWorld(
+          this.tableToWorld(
+            -ROOM.wallInset,
+            -ROOM.wallInset,
+            ROOM.wallTopY
+          )
+        ),
+      ];
+      const leftWall = [
+        this.projectWorld(
+          this.tableToWorld(
+            -ROOM.wallInset,
+            -ROOM.wallInset,
+            ROOM.floorY
+          )
+        ),
+        this.projectWorld(
+          this.tableToWorld(
+            -ROOM.wallInset,
+            TABLE.height + ROOM.wallInset,
+            ROOM.floorY
+          )
+        ),
+        this.projectWorld(
+          this.tableToWorld(
+            -ROOM.wallInset,
+            TABLE.height + ROOM.wallInset,
+            ROOM.wallTopY
+          )
+        ),
+        this.projectWorld(
+          this.tableToWorld(
+            -ROOM.wallInset,
+            -ROOM.wallInset,
+            ROOM.wallTopY
+          )
+        ),
+      ];
+      const floor = this.projectRect(
+        -ROOM.wallInset,
+        -ROOM.wallInset,
+        TABLE.width + ROOM.wallInset,
+        TABLE.height + ROOM.wallInset + 120,
+        ROOM.floorY
       );
-      glow.addColorStop(0, "rgba(255, 221, 145, 0.16)");
-      glow.addColorStop(1, "rgba(255, 221, 145, 0)");
-      ctx.fillStyle = glow;
+      const rug = this.projectRect(
+        26,
+        34,
+        TABLE.width - 26,
+        TABLE.height - 34,
+        ROOM.floorY + 1.5
+      );
+      const baseboard = [
+        this.projectWorld(
+          this.tableToWorld(
+            -ROOM.wallInset,
+            -ROOM.wallInset + 2,
+            ROOM.floorY + 20
+          )
+        ),
+        this.projectWorld(
+          this.tableToWorld(
+            TABLE.width + ROOM.wallInset,
+            -ROOM.wallInset + 2,
+            ROOM.floorY + 20
+          )
+        ),
+        this.projectWorld(
+          this.tableToWorld(
+            TABLE.width + ROOM.wallInset,
+            -ROOM.wallInset + 2,
+            ROOM.floorY
+          )
+        ),
+        this.projectWorld(
+          this.tableToWorld(
+            -ROOM.wallInset,
+            -ROOM.wallInset + 2,
+            ROOM.floorY
+          )
+        ),
+      ];
+
+      const backWallGradient = ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT);
+      backWallGradient.addColorStop(0, "#f9fbfc");
+      backWallGradient.addColorStop(1, "#e4e8ec");
+      this.drawPolygon(ctx, backWall, backWallGradient, "rgba(165, 173, 180, 0.24)", 1);
+
+      const leftWallGradient = ctx.createLinearGradient(0, 0, CANVAS_WIDTH * 0.3, 0);
+      leftWallGradient.addColorStop(0, "#dde4e8");
+      leftWallGradient.addColorStop(1, "#eef2f4");
+      this.drawPolygon(ctx, leftWall, leftWallGradient, "rgba(150, 160, 168, 0.18)", 1);
+
+      const floorGradient = ctx.createLinearGradient(0, CANVAS_HEIGHT * 0.58, 0, CANVAS_HEIGHT);
+      floorGradient.addColorStop(0, "#d4bc95");
+      floorGradient.addColorStop(0.55, "#b98957");
+      floorGradient.addColorStop(1, "#946739");
+      this.drawPolygon(ctx, floor, floorGradient);
+      this.drawFloorPattern(ctx);
+
+      const rugGradient = ctx.createLinearGradient(0, CANVAS_HEIGHT * 0.5, 0, CANVAS_HEIGHT);
+      rugGradient.addColorStop(0, "#f4f5f6");
+      rugGradient.addColorStop(1, "#dde1e4");
+      this.drawPolygon(ctx, rug, rugGradient, "rgba(148, 154, 160, 0.26)", 1);
+      this.drawPolygon(ctx, baseboard, "#f9fbfc");
+
+      const ceilingGlow = ctx.createRadialGradient(
+        CANVAS_WIDTH * 0.46,
+        CANVAS_HEIGHT * 0.12,
+        60,
+        CANVAS_WIDTH * 0.46,
+        CANVAS_HEIGHT * 0.12,
+        380
+      );
+      ceilingGlow.addColorStop(0, "rgba(255,255,255,0.78)");
+      ceilingGlow.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = ceilingGlow;
       ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-      ctx.fillStyle = "rgba(255,255,255,0.02)";
-      for (let line = 0; line < 22; line += 1) {
-        ctx.fillRect(0, line * 34, CANVAS_WIDTH, 1);
-      }
+      ctx.save();
+      ctx.strokeStyle = "rgba(205, 210, 214, 0.35)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(CANVAS_WIDTH * 0.16, 0);
+      ctx.lineTo(CANVAS_WIDTH * 0.36, CANVAS_HEIGHT * 0.52);
+      ctx.stroke();
+      ctx.restore();
     }
 
     drawTable(ctx) {
@@ -1508,33 +2551,100 @@
       ];
 
       const shadow = this.projectRect(
-        -TABLE.rail - 14,
-        -TABLE.rail + 30,
-        TABLE.width + TABLE.rail + 14,
-        TABLE.height + TABLE.rail + 34,
-        TABLE.frameBottomY - 16
+        64,
+        48,
+        TABLE.width - 64,
+        TABLE.height - 12,
+        ROOM.floorY + 2
       );
 
-      this.drawPolygon(ctx, shadow, "rgba(0, 0, 0, 0.32)");
-      this.drawPolygon(ctx, leftFace, "#3a2414");
-      this.drawPolygon(ctx, rightFace, "#442a19");
-      this.drawPolygon(ctx, frontFace, "#53321d");
+      this.drawPolygon(ctx, shadow, "rgba(0, 0, 0, 0.15)");
+      this.drawPedestalLeg(ctx, TABLE.width * 0.28, TABLE.height * 0.54);
+      this.drawPedestalLeg(ctx, TABLE.width * 0.72, TABLE.height * 0.54);
 
-      const woodGradient = ctx.createLinearGradient(0, felt[0].y, 0, felt[3].y + 80);
-      woodGradient.addColorStop(0, "#7a5130");
-      woodGradient.addColorStop(0.45, "#5c3921");
-      woodGradient.addColorStop(1, "#412414");
-      this.drawPolygon(ctx, outerTop, woodGradient, "rgba(255,255,255,0.08)", 1.2);
+      this.drawPolygon(ctx, leftFace, "#27292c");
+      this.drawPolygon(ctx, rightFace, "#171a1d");
+      this.drawPolygon(ctx, frontFace, "#111416");
+
+      const railGradient = ctx.createLinearGradient(0, felt[0].y - 40, 0, felt[3].y + 80);
+      railGradient.addColorStop(0, "#474b50");
+      railGradient.addColorStop(0.38, "#2a2d31");
+      railGradient.addColorStop(1, "#111315");
+      this.drawPolygon(ctx, outerTop, railGradient, "rgba(255,255,255,0.08)", 1.2);
 
       const feltGradient = ctx.createLinearGradient(0, felt[0].y, 0, felt[3].y);
-      feltGradient.addColorStop(0, "#1d9867");
-      feltGradient.addColorStop(0.55, "#0f7753");
-      feltGradient.addColorStop(1, "#0a553d");
-      this.drawPolygon(ctx, felt, feltGradient, "rgba(255,255,255,0.08)", 1.2);
+      feltGradient.addColorStop(0, "#4ed0ff");
+      feltGradient.addColorStop(0.45, "#1ca5e1");
+      feltGradient.addColorStop(1, "#1483bf");
+      this.drawPolygon(ctx, felt, feltGradient, "rgba(255,255,255,0.16)", 1.2);
 
       this.drawTableGuides(ctx);
       this.drawPockets(ctx);
       this.drawSightMarks(ctx);
+    }
+
+    drawFloorPattern(ctx) {
+      const patternHeight = ROOM.floorY + 0.8;
+
+      for (let offset = -500; offset <= TABLE.width + 500; offset += 84) {
+        this.drawPolyline(
+          ctx,
+          [
+            this.projectWorld(this.tableToWorld(offset, -ROOM.wallInset, patternHeight)),
+            this.projectWorld(
+              this.tableToWorld(offset + 360, TABLE.height + ROOM.wallInset, patternHeight)
+            ),
+          ],
+          "rgba(110, 73, 39, 0.16)",
+          1
+        );
+      }
+
+      for (let offset = -260; offset <= TABLE.width + 720; offset += 84) {
+        this.drawPolyline(
+          ctx,
+          [
+            this.projectWorld(this.tableToWorld(offset, -ROOM.wallInset, patternHeight)),
+            this.projectWorld(
+              this.tableToWorld(offset - 340, TABLE.height + ROOM.wallInset, patternHeight)
+            ),
+          ],
+          "rgba(132, 90, 50, 0.12)",
+          1
+        );
+      }
+    }
+
+    drawPedestalLeg(ctx, centerX, centerY) {
+      const topHeight = TABLE.frameBottomY + 4;
+      const bottomHeight = ROOM.floorY + 1;
+      const topLeft = this.projectWorld(
+        this.tableToWorld(centerX - 40, centerY, topHeight)
+      );
+      const topRight = this.projectWorld(
+        this.tableToWorld(centerX + 40, centerY, topHeight)
+      );
+      const bottomRight = this.projectWorld(
+        this.tableToWorld(centerX + 70, centerY, bottomHeight)
+      );
+      const bottomLeft = this.projectWorld(
+        this.tableToWorld(centerX - 70, centerY, bottomHeight)
+      );
+      const topEllipse = this.projectCirclePoints(centerX, centerY, 44, topHeight, 24);
+      const bottomEllipse = this.projectCirclePoints(centerX, centerY, 72, bottomHeight, 28);
+      const legGradient = ctx.createLinearGradient(
+        bottomLeft ? bottomLeft.x : 0,
+        topLeft ? topLeft.y : 0,
+        bottomRight ? bottomRight.x : 0,
+        bottomRight ? bottomRight.y : CANVAS_HEIGHT
+      );
+      legGradient.addColorStop(0, "#3b3f44");
+      legGradient.addColorStop(0.45, "#1e2125");
+      legGradient.addColorStop(1, "#090b0d");
+
+      this.drawPolygon(ctx, bottomEllipse, "#0c0e10");
+      this.drawPolygon(ctx, [topLeft, topRight, bottomRight, bottomLeft], legGradient);
+      this.drawPolygon(ctx, topEllipse, "#121416", "rgba(255,255,255,0.08)", 0.8);
     }
 
     drawTableGuides(ctx) {
@@ -1543,14 +2653,14 @@
         ctx,
         [
           this.projectWorld(this.tableToWorld(headX, 24, SURFACE_Y + 0.2)),
-          this.projectWorld(this.tableToWorld(headX, TABLE.height - 24, SURFACE_Y + 0.2)),
+            this.projectWorld(this.tableToWorld(headX, TABLE.height - 24, SURFACE_Y + 0.2)),
         ],
-        "rgba(255,255,255,0.14)",
+        "rgba(255,255,255,0.2)",
         2
       );
 
       const spot = this.projectCirclePoints(headX, TABLE.height * 0.5, 6, SURFACE_Y + 0.3, 20);
-      this.drawPolygon(ctx, spot, "rgba(255,255,255,0.17)");
+      this.drawPolygon(ctx, spot, "rgba(255,255,255,0.24)");
     }
 
     drawPockets(ctx) {
@@ -1562,7 +2672,7 @@
           SURFACE_Y - 2,
           34
         );
-        this.drawPolygon(ctx, ring, "rgba(11, 16, 15, 0.72)");
+        this.drawPolygon(ctx, ring, "rgba(8, 10, 12, 0.92)");
 
         const hole = this.projectCirclePoints(
           pocket.x,
@@ -1571,7 +2681,7 @@
           SURFACE_Y - 12,
           34
         );
-        this.drawPolygon(ctx, hole, "#010201");
+        this.drawPolygon(ctx, hole, "#000000");
       }
     }
 
@@ -1594,8 +2704,8 @@
           TABLE.frameTopY + 0.4,
           14
         );
-        this.drawPolygon(ctx, topMark, "rgba(255, 228, 166, 0.8)");
-        this.drawPolygon(ctx, bottomMark, "rgba(255, 228, 166, 0.8)");
+        this.drawPolygon(ctx, topMark, "rgba(88, 92, 98, 0.82)");
+        this.drawPolygon(ctx, bottomMark, "rgba(88, 92, 98, 0.82)");
       }
 
       for (let index = 1; index < 4; index += 1) {
@@ -1613,8 +2723,8 @@
           TABLE.frameTopY + 0.4,
           14
         );
-        this.drawPolygon(ctx, leftMark, "rgba(255, 228, 166, 0.8)");
-        this.drawPolygon(ctx, rightMark, "rgba(255, 228, 166, 0.8)");
+        this.drawPolygon(ctx, leftMark, "rgba(88, 92, 98, 0.82)");
+        this.drawPolygon(ctx, rightMark, "rgba(88, 92, 98, 0.82)");
       }
     }
 
@@ -1632,7 +2742,7 @@
       for (const entry of liveBalls) {
         const radius = entry.projection.radius;
         ctx.save();
-        ctx.fillStyle = "rgba(0, 0, 0, 0.24)";
+        ctx.fillStyle = "rgba(0, 0, 0, 0.18)";
         ctx.beginPath();
         ctx.ellipse(
           entry.surface.x + radius * 0.16,
@@ -1869,6 +2979,49 @@
         2,
         [6, 7]
       );
+    }
+
+    drawCallOverlay(ctx) {
+      if (this.playerCall.pocketIndex !== null) {
+        const pocket = POCKETS[this.playerCall.pocketIndex];
+        const ring = this.projectCirclePoints(
+          pocket.x,
+          pocket.y,
+          pocket.radius + 10,
+          SURFACE_Y + 0.4,
+          30
+        );
+        this.drawPolyline(
+          ctx,
+          [...ring, ring[0]],
+          "rgba(255, 222, 120, 0.96)",
+          2.4,
+          [7, 6]
+        );
+      }
+
+      if (this.playerCall.ballNumber !== null) {
+        const targetBall = this.balls.find(
+          (ball) => ball.number === this.playerCall.ballNumber && !ball.pocketed
+        );
+        const projection = targetBall ? this.projectBall(targetBall) : null;
+        if (projection) {
+          ctx.save();
+          ctx.strokeStyle = "rgba(255, 222, 120, 0.96)";
+          ctx.lineWidth = Math.max(1.5, projection.radius * 0.16);
+          ctx.setLineDash([8, 6]);
+          ctx.beginPath();
+          ctx.arc(
+            projection.x,
+            projection.y,
+            projection.radius * 1.28,
+            0,
+            Math.PI * 2
+          );
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
     }
 
     drawAimOverlay(ctx) {

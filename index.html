@@ -17,8 +17,8 @@
           <h1>Pool Night</h1>
           <p class="hero-copy">
             A camera-angled browser table with rolling balls, drag-to-shoot
-            control, simplified 8-ball rules, and a CPU opponent that actually
-            plans its shots.
+            control, WPA-style call-shot 8-ball rules, and a CPU opponent that
+            plays to the same rule set.
           </p>
         </div>
         <button id="newGameBtn" class="primary-button" type="button">
@@ -35,8 +35,9 @@
             aria-label="Pool table"
           ></canvas>
           <p class="table-hint">
-            Drag backward from the cue ball to shoot. After a scratch, click a
-            clear spot on the cloth to place the cue ball.
+            Drag backward from the cue ball to shoot. On non-break shots, call
+            your ball and pocket first. After ball-in-hand, click a legal spot
+            on the cloth to place the cue ball.
           </p>
         </section>
 
@@ -85,6 +86,40 @@
             <p class="microcopy">
               The power meter reacts as you pull the cue back.
             </p>
+          </section>
+
+          <section class="hud-section">
+            <p class="section-label">Called Shot</p>
+            <div class="stat call-stat">
+              <span class="stat-label">Current Call</span>
+              <strong id="callLabel">Break shot. No call required.</strong>
+            </div>
+            <div class="action-row">
+              <button
+                id="toggleSafetyBtn"
+                class="secondary-button"
+                type="button"
+              >
+                Safety: Off
+              </button>
+              <button
+                id="clearCallBtn"
+                class="secondary-button"
+                type="button"
+              >
+                Clear Call
+              </button>
+            </div>
+            <p class="microcopy">
+              On non-break shots, click a legal object ball, click a pocket, then
+              shoot. Use Safety to call a safety instead of a pot.
+            </p>
+          </section>
+
+          <section id="decisionSection" class="hud-section" hidden>
+            <p class="section-label">Decision</p>
+            <p id="decisionPrompt" class="decision-prompt"></p>
+            <div id="decisionButtons" class="action-stack"></div>
           </section>
 
           <section class="hud-section">

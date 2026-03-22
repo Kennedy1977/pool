@@ -22,16 +22,21 @@ Then visit `http://localhost:3000`.
 ## Controls
 
 - Drag backward from the cue ball to aim and shoot.
-- After a scratch, click on the table to place the cue ball.
+- On non-break shots, click a legal object ball, click a pocket, then shoot.
+- Use `Safety` to call a safety instead of a pot.
+- After ball-in-hand, click on the table to place the cue ball.
 - Use `New Rack` to restart the match.
 
 ## What is included
 
 - Perspective-rendered table, rolling ball visuals, pockets, and cue visuals
 - Ball-on-ball collisions, rail bounces, and rolling friction
-- Simplified 8-ball rules with solids/stripes assignment
-- Scratch handling with ball-in-hand
-- CPU shot selection that tries pocket shots before fallback safety hits
+- WPA-style 8-ball flow with legal and illegal breaks, called shots, safeties,
+  group assignment, scratches, and 8-ball win/loss handling
+- Cue-ball-in-hand handling, including behind-the-head-string restrictions
+  after applicable break fouls
+- CPU shot selection that calls pots, plays safeties, and respects the same
+  legal target and head-string rules
 - Express wrapper for deployment to Node hosts such as Hostinger
 
 ## Hostinger Notes
