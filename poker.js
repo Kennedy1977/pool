@@ -494,6 +494,21 @@
       this.eventLogEntries = this.eventLogEntries.slice(0, 12);
     }
 
+    describeSeatStrength(player) {
+      const cards = this.holeCards[player];
+      if (!cards.length) {
+        return "Waiting";
+      }
+
+      if (this.board.length >= 3) {
+        return describeMadeHand(
+          evaluateBestHand([...cards, ...this.board])
+        );
+      }
+
+      return `Hole cards ${this.formatPlayerCards(cards)}`;
+    }
+
     resetMatch() {
       this.clearCpuTimer();
       this.eventLogEntries = [];
@@ -700,7 +715,10 @@
       if (action === "fold") {
         this.folded[player] = true;
         this.addLog(`${this.nameFor(player)} fold.`);
-        this.awardPot([opponent], `${this.nameFor(opponent)} win the pot after ${this.nameFor(player).toLowerCase()} fold.`);
+        this.awardPot(
+          [opponent],
+          `${this.nameFor(opponent)} win the pot after ${this.nameFor(player)} fold.`
+        );
         return;
       }
 
@@ -870,6 +888,7 @@
       this.statusText = message;
       this.actionLabel = this.matchOver ? "Match over" : "Hand complete";
       this.showCpuCards = this.street === "showdown";
+      this.addLog(message);
 
       if (this.stacks.player <= 0 || this.stacks.cpu <= 0) {
         this.finishMatch();
@@ -1597,11 +1616,7 @@
         0,
         -284,
         "YOU",
-        this.holeCards.player.length
-          ? describeMadeHand(
-              evaluateBestHand([...this.holeCards.player, ...this.board.slice(0, Math.max(this.board.length, 2))])
-            )
-          : "Waiting",
+        this.describeSeatStrength("player"),
         this.activePlayer === "player" && !this.handOver
       );
       this.drawPlayerMarker(
@@ -1609,10 +1624,8 @@
         0,
         292,
         "CPU",
-        this.showCpuCards && this.holeCards.cpu.length
-          ? describeMadeHand(
-              evaluateBestHand([...this.holeCards.cpu, ...this.board.slice(0, Math.max(this.board.length, 2))])
-            )
+        this.showCpuCards
+          ? this.describeSeatStrength("cpu")
           : "Hidden hand",
         this.activePlayer === "cpu" && !this.handOver
       );
