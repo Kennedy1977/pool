@@ -1,0 +1,17 @@
+{
+  "name": "pool-night",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A browser-based pool game with an Express wrapper for deployment.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}

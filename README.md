@@ -1,18 +1,23 @@
 # Pool
 
-A browser-based single-player pool game with a CPU opponent.
+A browser-based single-player pool game with a CPU opponent, wrapped in an
+Express server for Node hosting.
 
-## How to run
+## Local run
 
-Open `index.html` in a browser.
-
-If you prefer to serve it locally:
+Install dependencies:
 
 ```bash
-python3 -m http.server 4173
+npm install
 ```
 
-Then visit `http://localhost:4173`.
+Start the app:
+
+```bash
+npm start
+```
+
+Then visit `http://localhost:3000`.
 
 ## Controls
 
@@ -27,3 +32,13 @@ Then visit `http://localhost:4173`.
 - Simplified 8-ball rules with solids/stripes assignment
 - Scratch handling with ball-in-hand
 - CPU shot selection that tries pocket shots before fallback safety hits
+- Express wrapper for deployment to Node hosts such as Hostinger
+
+## Hostinger Notes
+
+- Upload the project files, including `package.json`, `server.js`, and the game
+  assets.
+- Run `npm install` on the server.
+- Set the start command to `npm start` if your Hostinger panel asks for one.
+- Make sure the Node app uses the platform-provided `PORT` env var, which this
+  server already does.
