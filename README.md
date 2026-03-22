@@ -21,8 +21,13 @@ Then visit `http://localhost:3000`.
 
 ## Controls
 
-- Drag backward from the cue ball to aim and shoot.
+- Drag empty space to orbit the table.
+- Right-drag, middle-drag, or hold `Shift` while dragging to pan.
+- Use the mouse wheel or trackpad scroll to zoom.
+- Click the cue ball to enter shot mode, then aim over the table.
 - On non-break shots, click a legal object ball, click a pocket, then shoot.
+- Use the in-canvas cue-ball spin control and vertical power bar, then click
+  the cue ball again to fire the shot.
 - Use `Safety` to call a safety instead of a pot.
 - After ball-in-hand, click on the table to place the cue ball.
 - Use `New Rack` to restart the match.
