@@ -717,7 +717,9 @@
         this.addLog(`${this.nameFor(player)} fold.`);
         this.awardPot(
           [opponent],
-          `${this.nameFor(opponent)} win the pot after ${this.nameFor(player)} fold.`
+          player === "player"
+            ? "CPU wins the pot after you fold."
+            : "You win the pot after the CPU folds."
         );
         return;
       }
@@ -1432,7 +1434,7 @@
 
       ctx.fillStyle = "rgba(15, 25, 38, 0.7)";
       ctx.font = `700 ${Math.max(10, height * 0.12)}px "Trebuchet MS"`;
-      ctx.fillText(HAND_CATEGORY_NAMES[0], 0, height * 0.28);
+      ctx.fillText(card.suit, 0, height * 0.28);
       ctx.restore();
     }
 

@@ -1,9 +1,11 @@
-# Pool
+# Club Night
 
-A browser-based single-player pool game with a CPU opponent, wrapped in an
-Express server for Node hosting. The app now opens on a game-select screen
-where `Pool` launches the playable table and `Poker` currently shows a
-placeholder lounge.
+A browser-based game room with two modes, wrapped in an Express server for
+Node hosting.
+
+- `Pool`: a single-player 8-ball game with a CPU opponent.
+- `Poker`: a heads-up Texas Hold'em table with a CPU opponent and a 3D-styled
+  canvas scene inspired by `assets/poker.png`.
 
 ## Local run
 
