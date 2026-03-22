@@ -246,7 +246,10 @@
 
       this.dragShot = null;
       this.cameraGesture = null;
+      this.controlDrag = null;
       this.shotSetup = this.createShotSetup();
+      this.shotPower = 0;
+      this.shotSpin = { x: 0, y: 0 };
       this.eventLogEntries = [];
       this.balls = [];
       this.currentPlayer = "player";
@@ -398,12 +401,95 @@
       this.dragShot = null;
     }
 
+    resetShotControls() {
+      this.shotPower = 0;
+      this.shotSpin = { x: 0, y: 0 };
+      this.controlDrag = null;
+    }
+
+    getShotControlLayout() {
+      const panelWidth = 148;
+      const panelHeight = 248;
+      const panelX = CANVAS_WIDTH - panelWidth - 26;
+      const panelY = CANVAS_HEIGHT - panelHeight - 24;
+      const spinRadius = 38;
+      const spinCenterX = panelX + panelWidth * 0.5;
+      const spinCenterY = panelY + panelHeight - 56;
+      const powerWidth = 28;
+      const powerHeight = 120;
+      const powerX = spinCenterX - powerWidth * 0.5;
+      const powerY = panelY + 34;
+
+      return {
+        panelX,
+        panelY,
+        panelWidth,
+        panelHeight,
+        spinCenterX,
+        spinCenterY,
+        spinRadius,
+        knobRadius: 8,
+        knobLimit: spinRadius * 0.62,
+        powerX,
+        powerY,
+        powerWidth,
+        powerHeight,
+      };
+    }
+
+    updateShotSpinFromPoint(screenX, screenY) {
+      const layout = this.getShotControlLayout();
+      const rawX = screenX - layout.spinCenterX;
+      const rawY = layout.spinCenterY - screenY;
+      const magnitude = Math.hypot(rawX, rawY);
+      const limit = layout.knobLimit;
+      const scale = magnitude > limit ? limit / magnitude : 1;
+      this.shotSpin.x = (rawX * scale) / limit;
+      this.shotSpin.y = (rawY * scale) / limit;
+    }
+
+    updateShotPowerFromPoint(screenY) {
+      const layout = this.getShotControlLayout();
+      const relative = clamp((layout.powerY + layout.powerHeight - screenY) / layout.powerHeight, 0, 1);
+      this.shotPower = relative;
+    }
+
+    getShotSpeedFromControl() {
+      if (this.shotPower <= 0) {
+        return 0;
+      }
+
+      return lerp(MIN_SHOT_SPEED, MAX_SHOT_SPEED, this.shotPower);
+    }
+
+    hitTestShotControls(screenX, screenY) {
+      const layout = this.getShotControlLayout();
+      const inPowerBar =
+        screenX >= layout.powerX - 10 &&
+        screenX <= layout.powerX + layout.powerWidth + 10 &&
+        screenY >= layout.powerY - 10 &&
+        screenY <= layout.powerY + layout.powerHeight + 10;
+
+      if (inPowerBar) {
+        return "power";
+      }
+
+      if (
+        distance(screenX, screenY, layout.spinCenterX, layout.spinCenterY) <=
+        layout.spinRadius + 10
+      ) {
+        return "spin";
+      }
+
+      return null;
+    }
+
     selectCueBallForShot() {
       this.shotSetup.cueSelected = true;
       this.shotSetup.targetBallNumber = null;
       this.statusText = this.breakShotPending
-        ? "Cue ball selected. Click a target ball, then drag back from the cue ball to break."
-        : "Cue ball selected. Click a legal target ball, then drag back from the cue ball to shoot.";
+        ? "Cue ball selected. Click a target ball, set power and spin, then click the cue ball again to break."
+        : "Cue ball selected. Click a legal target ball, set power and spin, then click the cue ball again to shoot.";
     }
 
     getTargetBallForShot() {
@@ -483,12 +569,12 @@
 
         this.statusText =
           this.playerCall.pocketIndex === null
-            ? `Ball ${number} selected. Choose a pocket, then drag back from the cue ball to shoot.`
-            : `Ball ${number} to the ${POCKET_LABELS[this.playerCall.pocketIndex]} selected. Drag back from the cue ball to set power.`;
+            ? `Ball ${number} selected. Choose a pocket, then click the cue ball again to shoot.`
+            : `Ball ${number} to the ${POCKET_LABELS[this.playerCall.pocketIndex]} selected. Click the cue ball again to shoot with the current power and spin.`;
         return;
       }
 
-      this.statusText = `Target ball ${number} selected. Drag back from the cue ball to break.`;
+      this.statusText = `Target ball ${number} selected. Click the cue ball again to break with the current power and spin.`;
     }
 
     refreshPointerTableCoordinates() {
@@ -683,6 +769,7 @@
       };
       this.placementPreview = null;
       this.resetShotSetup();
+      this.resetShotControls();
       this.activeShot = null;
       this.pendingDecision = null;
       this.breakShotPending = true;
@@ -735,6 +822,8 @@
         vy: 0,
         radius: BALL_RADIUS,
         pocketed: false,
+        spinX: 0,
+        spinY: 0,
         rotX: randomBetween(-0.6, 0.6),
         rotZ: randomBetween(-0.6, 0.6),
       };
@@ -806,6 +895,24 @@
         ball.y += ball.vy * deltaSeconds;
         ball.rotX += (ball.y - previousY) / BALL_RADIUS;
         ball.rotZ -= (ball.x - previousX) / BALL_RADIUS;
+
+        if (ball.number === 0 && (Math.abs(ball.spinX) > 0.001 || Math.abs(ball.spinY) > 0.001)) {
+          const speed = Math.hypot(ball.vx, ball.vy);
+          if (speed > 1) {
+            const dirX = ball.vx / speed;
+            const dirY = ball.vy / speed;
+            const normalX = -dirY;
+            const normalY = dirX;
+            const sideForce = ball.spinX * 44 * deltaSeconds;
+            const forwardForce = ball.spinY * 30 * deltaSeconds;
+            ball.vx += normalX * sideForce + dirX * forwardForce;
+            ball.vy += normalY * sideForce + dirY * forwardForce;
+          }
+
+          const spinDecay = Math.exp(-2.4 * deltaSeconds);
+          ball.spinX *= spinDecay;
+          ball.spinY *= spinDecay;
+        }
 
         if (
           this.activeShot &&
@@ -894,6 +1001,8 @@
       ball.pocketed = true;
       ball.vx = 0;
       ball.vy = 0;
+      ball.spinX = 0;
+      ball.spinY = 0;
 
       if (this.activeShot) {
         this.activeShot.pocketed.push(ball.number);
@@ -914,25 +1023,42 @@
       const maxY = TABLE.height - BALL_RADIUS;
 
       let touchedRail = false;
+      let verticalRail = false;
+      let horizontalRail = false;
 
       if (ball.x < minX) {
         ball.x = minX;
         ball.vx = Math.abs(ball.vx) * RAIL_RESTITUTION;
         touchedRail = true;
+        verticalRail = true;
       } else if (ball.x > maxX) {
         ball.x = maxX;
         ball.vx = -Math.abs(ball.vx) * RAIL_RESTITUTION;
         touchedRail = true;
+        verticalRail = true;
       }
 
       if (ball.y < minY) {
         ball.y = minY;
         ball.vy = Math.abs(ball.vy) * RAIL_RESTITUTION;
         touchedRail = true;
+        horizontalRail = true;
       } else if (ball.y > maxY) {
         ball.y = maxY;
         ball.vy = -Math.abs(ball.vy) * RAIL_RESTITUTION;
         touchedRail = true;
+        horizontalRail = true;
+      }
+
+      if (touchedRail && ball.number === 0) {
+        if (verticalRail) {
+          ball.vy += ball.spinX * 76;
+        }
+        if (horizontalRail) {
+          ball.vx -= ball.spinX * 76;
+        }
+        ball.spinX *= 0.48;
+        ball.spinY *= 0.72;
       }
 
       if (touchedRail && this.activeShot) {
@@ -991,6 +1117,24 @@
       firstBall.vy -= impulseY / BALL_MASS;
       secondBall.vx += impulseX / BALL_MASS;
       secondBall.vy += impulseY / BALL_MASS;
+
+      const cueBall =
+        firstBall.number === 0 ? firstBall : secondBall.number === 0 ? secondBall : null;
+      if (cueBall) {
+        const cueDirectionSign = cueBall === firstBall ? 1 : -1;
+        if (Math.abs(cueBall.spinY) > 0.01) {
+          cueBall.vx += normalX * cueDirectionSign * cueBall.spinY * 78;
+          cueBall.vy += normalY * cueDirectionSign * cueBall.spinY * 78;
+          cueBall.spinY *= 0.36;
+        }
+        if (Math.abs(cueBall.spinX) > 0.01) {
+          const tangentX = -normalY;
+          const tangentY = normalX;
+          cueBall.vx += tangentX * cueBall.spinX * 34;
+          cueBall.vy += tangentY * cueBall.spinX * 34;
+          cueBall.spinX *= 0.58;
+        }
+      }
     }
 
     areBallsStill() {
@@ -1531,6 +1675,7 @@
       if (this.currentPlayer === "cpu") {
         this.playerCall = this.createEmptyCall();
         this.resetShotSetup();
+        this.resetShotControls();
         if (!cpuPlacedFromHand) {
           this.upcomingShotRestriction = false;
         }
@@ -1542,6 +1687,7 @@
       } else {
         this.playerCall = this.createEmptyCall();
         this.resetShotSetup();
+        this.resetShotControls();
         if (!this.ballInHand) {
           this.upcomingShotRestriction = false;
         }
@@ -1947,17 +2093,24 @@
               calledBall: this.playerCall.ballNumber,
               calledPocketIndex: this.playerCall.pocketIndex,
               safety: this.playerCall.safety,
+              spinX: this.shotSpin.x,
+              spinY: this.shotSpin.y,
             }
           : {
               calledBall: null,
               calledPocketIndex: null,
               safety: false,
+              spinX: 0,
+              spinY: 0,
             });
 
       cueBall.pocketed = false;
       cueBall.vx = direction.x * power;
       cueBall.vy = direction.y * power;
+      cueBall.spinX = shotChoice.spinX || 0;
+      cueBall.spinY = shotChoice.spinY || 0;
       this.resetShotSetup();
+      this.resetShotControls();
       this.state = "balls-moving";
       this.activeShot = {
         shooter,
@@ -1980,6 +2133,10 @@
         cueCrossedHeadString: false,
         cueStartX: cueBall.x,
         firstHitWasAboveHeadString: false,
+        cueSpin: {
+          x: shotChoice.spinX || 0,
+          y: shotChoice.spinY || 0,
+        },
       };
       this.upcomingShotRestriction = false;
     }
@@ -2054,6 +2211,14 @@
       this.pointer.screenY = point.y;
       this.pointer.inside = true;
 
+      if (this.controlDrag) {
+        if (this.controlDrag === "spin") {
+          this.updateShotSpinFromPoint(point.x, point.y);
+        } else if (this.controlDrag === "power") {
+          this.updateShotPowerFromPoint(point.y);
+        }
+      }
+
       if (this.cameraGesture) {
         const deltaX = point.x - this.cameraGesture.lastScreenX;
         const deltaY = point.y - this.cameraGesture.lastScreenY;
@@ -2066,11 +2231,6 @@
         this.cameraGesture.lastScreenY = point.y;
       } else {
         this.refreshPointerTableCoordinates();
-      }
-
-      if (this.dragShot && this.pointer.tableValid) {
-        this.dragShot.currentTableX = this.pointer.tableX;
-        this.dragShot.currentTableY = this.pointer.tableY;
       }
     }
 
@@ -2101,6 +2261,24 @@
           this.canvas.setPointerCapture(event.pointerId);
         } catch (_error) {
           // Ignore unsupported pointer-capture edge cases.
+        }
+      }
+
+      const canUseShotControls =
+        event.button === 0 &&
+        this.state === "aim" &&
+        this.currentPlayer === "player" &&
+        !this.winner;
+      if (canUseShotControls) {
+        const controlHit = this.hitTestShotControls(point.x, point.y);
+        if (controlHit) {
+          this.controlDrag = controlHit;
+          if (controlHit === "spin") {
+            this.updateShotSpinFromPoint(point.x, point.y);
+          } else {
+            this.updateShotPowerFromPoint(point.y);
+          }
+          return;
         }
       }
 
@@ -2170,53 +2348,51 @@
 
         if (!this.isPlayerReadyToShoot()) {
           this.statusText = this.breakShotPending
-            ? "Cue ball selected. Click a target ball, then drag back from the cue ball to break."
+            ? "Cue ball selected. Click a target ball, set power and spin, then click the cue ball again to break."
             : "Cue ball selected. Click a legal target ball and pocket first.";
           return;
         }
 
-        const lockedDirection = this.getAimDirectionForPlayer();
-        if (!lockedDirection) {
+        if (this.shotPower <= 0) {
+          this.statusText = "Raise the power above 0% before taking the shot.";
+          return;
+        }
+
+        const direction = this.getAimDirectionForPlayer();
+        if (!direction) {
           this.statusText = "Choose a target direction before taking the shot.";
           return;
         }
 
-        this.dragShot = {
-          currentTableX: tablePoint ? tablePoint.x : cueBall.x,
-          currentTableY: tablePoint ? tablePoint.y : cueBall.y,
-          lockedDirection,
-        };
-        return;
-      }
-
-      if (!this.shotSetup.cueSelected) {
-        this.startCameraGesture("orbit", point);
+        const power = this.getShotSpeedFromControl();
+        this.shoot("player", direction, power);
+        this.statusText = this.breakShotPending
+          ? "Break shot in motion."
+          : this.playerCall.safety
+            ? "Safety in motion."
+            : "Called shot in motion.";
         return;
       }
 
       const ballHit = this.getBallHitAtScreenPoint(point.x, point.y);
-      if (ballHit) {
+      if (ballHit && this.shotSetup.cueSelected) {
         this.selectTargetBallForShot(ballHit.number);
         return;
       }
 
-      if (!this.breakShotPending) {
+      if (!this.breakShotPending && this.shotSetup.cueSelected) {
         const pocketHit = this.getPocketHitAtScreenPoint(point.x, point.y);
         if (pocketHit) {
           this.selectPlayerPocketCall(pocketHit.pocketIndex);
           const targetBall = this.getTargetBallForShot();
           if (targetBall) {
-            this.statusText = `Ball ${targetBall.number} to the ${POCKET_LABELS[pocketHit.pocketIndex]} selected. Drag back from the cue ball to set power.`;
+            this.statusText = `Ball ${targetBall.number} to the ${POCKET_LABELS[pocketHit.pocketIndex]} selected. Click the cue ball again to shoot with the current power and spin.`;
           }
           return;
         }
       }
 
-      this.statusText = this.breakShotPending
-        ? "Cue ball selected. Click a target ball, then drag back from the cue ball to break."
-        : this.isPlayerReadyToShoot()
-          ? "Drag back from the cue ball to set power, or click a different ball or pocket to adjust the shot."
-          : "Cue ball selected. Click a legal target ball and pocket first.";
+      this.startCameraGesture(cameraGestureType, point);
     }
 
     handlePointerUp(event) {
@@ -2228,43 +2404,15 @@
         }
       }
 
+      if (this.controlDrag) {
+        this.controlDrag = null;
+        return;
+      }
+
       if (this.cameraGesture) {
         this.cameraGesture = null;
         return;
       }
-
-      if (!this.dragShot || this.state !== "aim" || this.currentPlayer !== "player") {
-        return;
-      }
-
-      const point = this.getPointerPosition(event);
-      const tablePoint = this.screenToTable(point.x, point.y);
-      if (tablePoint) {
-        this.dragShot.currentTableX = tablePoint.x;
-        this.dragShot.currentTableY = tablePoint.y;
-      }
-
-      const cueBall = this.getCueBall();
-      const lockedDirection = this.dragShot.lockedDirection;
-      const pullDistance = this.getDragPullDistance();
-
-      if (pullDistance >= 14) {
-        const direction =
-          lockedDirection ||
-          normalize(
-            cueBall.x - this.dragShot.currentTableX,
-            cueBall.y - this.dragShot.currentTableY
-          );
-        const power = clamp(pullDistance * 5.2, MIN_SHOT_SPEED, MAX_SHOT_SPEED);
-        this.shoot("player", direction, power);
-        this.statusText = this.breakShotPending
-          ? "Break shot in motion."
-          : this.playerCall.safety
-            ? "Safety in motion."
-            : "Called shot in motion.";
-      }
-
-      this.dragShot = null;
     }
 
     handleWheel(event) {
@@ -2552,8 +2700,8 @@
       }
 
       let power = 0;
-      if (this.dragShot && this.currentPlayer === "player" && this.state === "aim") {
-        power = this.getDragPullDistance() / 180;
+      if (this.currentPlayer === "player" && this.state === "aim") {
+        power = this.shotPower;
       }
 
       this.ui.powerFill.style.width = `${clamp(power, 0, 1) * 100}%`;
@@ -2694,6 +2842,7 @@
 
       if (this.state === "aim" && this.currentPlayer === "player") {
         this.drawAimOverlay(ctx);
+        this.drawShotControls(ctx);
       }
 
       if (this.state === "game-over") {
@@ -3365,29 +3514,111 @@
       }
     }
 
+    drawShotControls(ctx) {
+      const layout = this.getShotControlLayout();
+      const knobX = layout.spinCenterX + this.shotSpin.x * layout.knobLimit;
+      const knobY = layout.spinCenterY - this.shotSpin.y * layout.knobLimit;
+      const fillHeight = layout.powerHeight * this.shotPower;
+      const fillY = layout.powerY + layout.powerHeight - fillHeight;
+
+      ctx.save();
+      ctx.fillStyle = "rgba(8, 18, 30, 0.58)";
+      this.roundRect(ctx, layout.panelX, layout.panelY, layout.panelWidth, layout.panelHeight, 22);
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+      ctx.lineWidth = 1;
+      this.roundRect(ctx, layout.panelX, layout.panelY, layout.panelWidth, layout.panelHeight, 22);
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(235, 242, 248, 0.9)";
+      ctx.font = "700 11px 'Trebuchet MS'";
+      ctx.textAlign = "center";
+      ctx.fillText("POWER", layout.panelX + layout.panelWidth * 0.5, layout.panelY + 20);
+      ctx.fillText("SPIN", layout.panelX + layout.panelWidth * 0.5, layout.spinCenterY + layout.spinRadius + 26);
+
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
+      this.roundRect(ctx, layout.powerX, layout.powerY, layout.powerWidth, layout.powerHeight, 12);
+      ctx.fill();
+
+      const powerGradient = ctx.createLinearGradient(
+        layout.powerX,
+        layout.powerY,
+        layout.powerX,
+        layout.powerY + layout.powerHeight
+      );
+      powerGradient.addColorStop(0, "#ff835b");
+      powerGradient.addColorStop(0.48, "#ffd767");
+      powerGradient.addColorStop(1, "#7df3cf");
+      ctx.fillStyle = powerGradient;
+      this.roundRect(ctx, layout.powerX, fillY, layout.powerWidth, Math.max(fillHeight, 8), 12);
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(255,255,255,0.16)";
+      ctx.lineWidth = 1;
+      this.roundRect(ctx, layout.powerX, layout.powerY, layout.powerWidth, layout.powerHeight, 12);
+      ctx.stroke();
+
+      ctx.fillStyle = "#f2f6fb";
+      ctx.font = "700 12px 'Trebuchet MS'";
+      ctx.fillText(`${Math.round(this.shotPower * 100)}%`, layout.panelX + layout.panelWidth * 0.5, layout.powerY + layout.powerHeight + 20);
+
+      const sphereGradient = ctx.createRadialGradient(
+        layout.spinCenterX - 12,
+        layout.spinCenterY - 14,
+        8,
+        layout.spinCenterX,
+        layout.spinCenterY,
+        layout.spinRadius
+      );
+      sphereGradient.addColorStop(0, "#ffffff");
+      sphereGradient.addColorStop(1, "#dce5ef");
+      ctx.fillStyle = sphereGradient;
+      ctx.beginPath();
+      ctx.arc(layout.spinCenterX, layout.spinCenterY, layout.spinRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(37, 55, 80, 0.26)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(layout.spinCenterX, layout.spinCenterY, layout.spinRadius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.strokeStyle = "rgba(72, 92, 118, 0.2)";
+      ctx.beginPath();
+      ctx.moveTo(layout.spinCenterX - layout.spinRadius + 8, layout.spinCenterY);
+      ctx.lineTo(layout.spinCenterX + layout.spinRadius - 8, layout.spinCenterY);
+      ctx.moveTo(layout.spinCenterX, layout.spinCenterY - layout.spinRadius + 8);
+      ctx.lineTo(layout.spinCenterX, layout.spinCenterY + layout.spinRadius - 8);
+      ctx.stroke();
+
+      ctx.fillStyle = "#1a2735";
+      ctx.beginPath();
+      ctx.arc(knobX, knobY, layout.knobRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.48)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.restore();
+    }
+
     drawAimOverlay(ctx) {
       const cueBall = this.getCueBall();
       if (cueBall.pocketed) {
         return;
       }
 
-      if (!this.dragShot && !this.shotSetup.cueSelected) {
+      if (!this.shotSetup.cueSelected) {
         return;
       }
 
-      const direction = this.dragShot?.lockedDirection || this.getAimDirectionForPlayer();
+      const direction = this.getAimDirectionForPlayer();
 
       if (!direction) {
         return;
       }
 
-      const guideDistance = this.dragShot
-        ? clamp(
-            this.getDragPullDistance() * 2.2,
-            100,
-            360
-          )
-        : 180;
+      const guideDistance = clamp(190 + this.shotPower * 140, 180, 340);
 
       const linePoints = [
         this.projectWorld(this.tableToWorld(cueBall.x, cueBall.y, BALL_CENTER_Y)),
@@ -3403,9 +3634,9 @@
       this.drawPolyline(
         ctx,
         linePoints,
-        this.dragShot ? "rgba(255,255,255,0.78)" : "rgba(255,255,255,0.28)",
-        this.dragShot ? 2.2 : 1.6,
-        this.dragShot ? [10, 8] : [6, 12]
+        "rgba(255,255,255,0.58)",
+        1.9,
+        [8, 10]
       );
 
       const cueProjection = this.projectBall(cueBall);
@@ -3447,11 +3678,7 @@
         }
       }
 
-      if (!this.dragShot) {
-        return;
-      }
-
-      const pull = this.getDragPullDistance();
+      const pull = 28 + this.shotPower * 92;
       const buttPoint = this.projectWorld(
         this.tableToWorld(
           cueBall.x - direction.x * (BALL_RADIUS + pull * 0.78),
