@@ -98,6 +98,15 @@
     return { x: x / magnitude, y: y / magnitude };
   }
 
+  function rotate2(vector, angle) {
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return {
+      x: vector.x * cos - vector.y * sin,
+      y: vector.x * sin + vector.y * cos,
+    };
+  }
+
   function normalize3(vector) {
     const magnitude = Math.hypot(vector.x, vector.y, vector.z) || 1;
     return {
@@ -246,6 +255,7 @@
 
       this.cameraGesture = null;
       this.controlDrag = null;
+      this.playerAimView = this.createPlayerAimView();
       this.shotSetup = this.createShotSetup();
       this.shotPower = 0;
       this.shotSpin = { x: 0, y: 0 };
@@ -279,6 +289,16 @@
       return {
         cueSelected: false,
         targetBallNumber: null,
+      };
+    }
+
+    createPlayerAimView() {
+      return {
+        yawOffset: 0,
+        pitchOffset: 0,
+        distanceOffset: 0,
+        lateralOffset: 0,
+        leadOffset: 0,
       };
     }
 
@@ -405,6 +425,10 @@
       this.controlDrag = null;
     }
 
+    resetPlayerAimView() {
+      this.playerAimView = this.createPlayerAimView();
+    }
+
     getShotControlLayout() {
       const panelWidth = 148;
       const panelHeight = 248;
@@ -483,6 +507,7 @@
     }
 
     selectCueBallForShot() {
+      this.resetPlayerAimView();
       this.shotSetup.cueSelected = true;
       this.shotSetup.targetBallNumber = null;
       this.statusText = this.breakShotPending
@@ -525,7 +550,47 @@
       return this.isLegalCalledBall(number, "player");
     }
 
+    deselectTargetBallForShot() {
+      const previousTarget = this.shotSetup.targetBallNumber;
+      if (previousTarget === null) {
+        return;
+      }
+
+      this.shotSetup.cueSelected = true;
+      this.shotSetup.targetBallNumber = null;
+
+      if (this.breakShotPending) {
+        this.statusText =
+          "Target cleared. Click a different ball, set power and spin, then click the cue ball again to break.";
+        return;
+      }
+
+      if (this.playerCall.safety) {
+        this.statusText =
+          "Safety target cleared. Click another legal ball or keep adjusting the safety line before shooting.";
+        return;
+      }
+
+      this.playerCall.ballNumber = null;
+
+      if (this.playerCall.pocketIndex !== null) {
+        this.statusText = `${POCKET_LABELS[this.playerCall.pocketIndex]} stays selected. Click a different legal ball.`;
+        return;
+      }
+
+      this.statusText =
+        "Target cleared. Click a different legal ball, choose a pocket, then click the cue ball again to shoot.";
+    }
+
     selectTargetBallForShot(number) {
+      if (
+        this.shotSetup.cueSelected &&
+        this.shotSetup.targetBallNumber === number
+      ) {
+        this.deselectTargetBallForShot();
+        return;
+      }
+
       if (!this.isLegalTargetBallForShot(number)) {
         this.statusText = "That is not a legal target ball right now.";
         return;
@@ -547,12 +612,12 @@
           this.playerCall.pocketIndex === null
             ? `Ball ${number} selected. Choose a pocket, then click the cue ball again to shoot.`
             : `Ball ${number} to the ${POCKET_LABELS[this.playerCall.pocketIndex]} selected. Click the cue ball again to shoot with the current power and spin.`;
-        this.frameCameraForPlayerShot(this.getAimDirectionForPlayer());
+        this.frameCameraForPlayerShot(this.getAimDirectionForPlayer(), { recenter: true });
         return;
       }
 
       this.statusText = `Target ball ${number} selected. Click the cue ball again to break with the current power and spin.`;
-      this.frameCameraForPlayerShot(this.getAimDirectionForPlayer());
+      this.frameCameraForPlayerShot(this.getAimDirectionForPlayer(), { recenter: true });
     }
 
     refreshPointerTableCoordinates() {
@@ -582,7 +647,17 @@
       this.updateCamera();
     }
 
-    frameCameraForPlayerShot(direction) {
+    isPlayerAimCameraActive() {
+      return (
+        this.currentPlayer === "player" &&
+        this.state === "aim" &&
+        this.shotSetup.cueSelected &&
+        this.shotSetup.targetBallNumber !== null &&
+        !this.winner
+      );
+    }
+
+    frameCameraForPlayerShot(direction, options = {}) {
       if (!direction) {
         return;
       }
@@ -592,8 +667,17 @@
         return;
       }
 
+      if (options.recenter) {
+        this.resetPlayerAimView();
+      }
+
       const targetBall = this.getTargetBallForShot();
-      const forwardDistance = this.breakShotPending
+      const shotDirection = normalize(direction.x, direction.y);
+      const sideDirection = {
+        x: -shotDirection.y,
+        y: shotDirection.x,
+      };
+      const baseForwardDistance = this.breakShotPending
         ? 230
         : clamp(
             targetBall
@@ -602,21 +686,86 @@
             150,
             260
           );
-      const cameraDistance = this.breakShotPending
+      const forwardDistance = clamp(
+        baseForwardDistance + this.playerAimView.leadOffset,
+        120,
+        320
+      );
+      const baseCameraDistance = this.breakShotPending
         ? 1020
-        : clamp(820 + forwardDistance * 0.9, 820, 1120);
-      const pitch = this.breakShotPending ? 0.64 : 0.6;
+        : clamp(820 + baseForwardDistance * 0.9, 820, 1120);
+      const cameraDistance = clamp(
+        baseCameraDistance + this.playerAimView.distanceOffset,
+        680,
+        1380
+      );
+      const pitch = clamp(
+        (this.breakShotPending ? 0.64 : 0.6) + this.playerAimView.pitchOffset,
+        0.34,
+        1.02
+      );
+      const rotatedView = rotate2(shotDirection, this.playerAimView.yawOffset);
+      const viewDirection = normalize(rotatedView.x, rotatedView.y);
       const horizontalDistance = Math.cos(pitch) * cameraDistance;
-      const focusTableX = clamp(cueBall.x + direction.x * forwardDistance, BALL_RADIUS, TABLE.width - BALL_RADIUS);
-      const focusTableY = clamp(cueBall.y + direction.y * forwardDistance, BALL_RADIUS, TABLE.height - BALL_RADIUS);
+      const focusTableX = clamp(
+        cueBall.x +
+          shotDirection.x * forwardDistance +
+          sideDirection.x * this.playerAimView.lateralOffset,
+        BALL_RADIUS,
+        TABLE.width - BALL_RADIUS
+      );
+      const focusTableY = clamp(
+        cueBall.y +
+          shotDirection.y * forwardDistance +
+          sideDirection.y * this.playerAimView.lateralOffset,
+        BALL_RADIUS,
+        TABLE.height - BALL_RADIUS
+      );
       const target = this.tableToWorld(focusTableX, focusTableY, 24);
       const position = {
-        x: target.x - direction.x * horizontalDistance,
+        x: target.x - viewDirection.x * horizontalDistance,
         y: target.y + Math.sin(pitch) * cameraDistance,
-        z: target.z - direction.y * horizontalDistance,
+        z: target.z - viewDirection.y * horizontalDistance,
       };
 
       this.setCameraPose(position, target);
+    }
+
+    adjustPlayerAimCameraOrbit(deltaX, deltaY) {
+      this.playerAimView.yawOffset = clamp(
+        this.playerAimView.yawOffset - deltaX * 0.0055,
+        -0.72,
+        0.72
+      );
+      this.playerAimView.pitchOffset = clamp(
+        this.playerAimView.pitchOffset + deltaY * 0.0044,
+        -0.24,
+        0.26
+      );
+      this.frameCameraForPlayerShot(this.getAimDirectionForPlayer());
+    }
+
+    adjustPlayerAimCameraPan(deltaX, deltaY) {
+      this.playerAimView.lateralOffset = clamp(
+        this.playerAimView.lateralOffset - deltaX * 0.72,
+        -140,
+        140
+      );
+      this.playerAimView.leadOffset = clamp(
+        this.playerAimView.leadOffset + deltaY * 0.8,
+        -90,
+        100
+      );
+      this.frameCameraForPlayerShot(this.getAimDirectionForPlayer());
+    }
+
+    adjustPlayerAimCameraZoom(deltaY) {
+      this.playerAimView.distanceOffset = clamp(
+        this.playerAimView.distanceOffset + deltaY * 0.52,
+        -300,
+        460
+      );
+      this.frameCameraForPlayerShot(this.getAimDirectionForPlayer());
     }
 
     getSuggestedPlayerShotChoice() {
@@ -663,6 +812,7 @@
         return;
       }
 
+      this.resetPlayerAimView();
       this.shotSetup.cueSelected = true;
       this.shotSetup.targetBallNumber =
         choice.targetBallNumber ?? choice.calledBall ?? null;
@@ -759,7 +909,7 @@
     resetPlayerCall() {
       this.playerCall = this.createEmptyCall();
       if (this.currentPlayer === "player" && this.state === "aim" && !this.breakShotPending) {
-        this.statusText = "Click the cue ball, then choose a legal target ball and pocket, or toggle Safety.";
+        this.statusText = "Choose a legal target ball and pocket, or toggle Safety.";
       }
       this.syncHud();
     }
@@ -792,7 +942,7 @@
         this.playerCall.ballNumber === null
           ? `Pocket ${POCKET_LABELS[pocketIndex]} selected. Choose a legal ball.`
           : `Ball ${this.playerCall.ballNumber} to the ${POCKET_LABELS[pocketIndex]} called.`;
-      this.frameCameraForPlayerShot(this.getAimDirectionForPlayer());
+      this.frameCameraForPlayerShot(this.getAimDirectionForPlayer(), { recenter: true });
     }
 
     suggestPlayerCall() {
@@ -862,7 +1012,7 @@
         this.playerCall.pocketIndex = null;
         this.statusText = "Safety called. Shoot a legal safety and play will pass.";
       } else {
-        this.statusText = "Safety cleared. Click the cue ball, then choose a legal target ball and pocket.";
+        this.statusText = "Safety cleared. Keep the suggestion or choose a legal target ball and pocket.";
       }
       this.syncHud();
     }
@@ -961,6 +1111,10 @@
 
     update(deltaSeconds, timestamp) {
       this.refreshPointerTableCoordinates();
+
+      if (this.isPlayerAimCameraActive() && !this.cameraGesture) {
+        this.frameCameraForPlayerShot(this.getAimDirectionForPlayer());
+      }
 
       if (this.state === "balls-moving") {
         let timeLeft = deltaSeconds;
@@ -1436,7 +1590,7 @@
             {
               score: 45,
               action: () =>
-                this.rerackAfterBreak(opponent, "CPU chooses to re-break after the foul break."),
+                this.rerackAfterBreak(shooter, "CPU chooses to have the breaker re-break after the foul break."),
             },
           ]);
           option.action();
@@ -1459,10 +1613,10 @@
             },
           },
           {
-            label: "Re-rack and break",
+            label: "Re-rack and breaker breaks again",
             action: () => {
               this.clearPendingDecision();
-              this.rerackAfterBreak(opponent, "You choose to re-break after the foul break.");
+              this.rerackAfterBreak(shooter, "You choose to have the breaker re-break after the foul break.");
             },
           },
         ]);
@@ -1598,11 +1752,6 @@
             {
               score: 68,
               action: () =>
-                this.rerackAfterBreak(opponent, "CPU chooses to re-rack and take the break."),
-            },
-            {
-              score: 44,
-              action: () =>
                 this.rerackAfterBreak(shooter, "CPU chooses to make the breaker break again."),
             },
           ]);
@@ -1620,13 +1769,6 @@
               this.breakShotPending = false;
               this.statusText = "You accept the table after the illegal break.";
               this.prepareNextTurn();
-            },
-          },
-          {
-            label: "Re-rack and break",
-            action: () => {
-              this.clearPendingDecision();
-              this.rerackAfterBreak(opponent, "You choose to re-rack and take the break.");
             },
           },
           {
@@ -1809,8 +1951,8 @@
         }
         this.state = "aim";
         this.statusText = this.breakShotPending
-          ? "Click the cue ball to line up the break."
-          : "Click the cue ball, then choose a legal target ball and pocket, or toggle Safety.";
+          ? "Loading your suggested break."
+          : "Loading your suggested shot.";
         this.autoPlanNextPlayerShot();
       }
     }
@@ -2345,7 +2487,13 @@
       if (this.cameraGesture) {
         const deltaX = point.x - this.cameraGesture.lastScreenX;
         const deltaY = point.y - this.cameraGesture.lastScreenY;
-        if (this.cameraGesture.type === "pan") {
+        if (this.isPlayerAimCameraActive()) {
+          if (this.cameraGesture.type === "pan") {
+            this.adjustPlayerAimCameraPan(deltaX, deltaY);
+          } else {
+            this.adjustPlayerAimCameraOrbit(deltaX, deltaY);
+          }
+        } else if (this.cameraGesture.type === "pan") {
           this.panCamera(deltaX, deltaY);
         } else {
           this.orbitCamera(deltaX, deltaY);
@@ -2428,8 +2576,8 @@
           this.resetShotSetup();
           this.resetShotControls();
           this.statusText = this.breakShotPending
-            ? "Cue ball placed. Click the cue ball to line up the break."
-            : "Cue ball placed. Click the cue ball, then choose a legal target ball and pocket.";
+            ? "Cue ball placed. Loading the suggested break."
+            : "Cue ball placed. Loading the suggested shot.";
           this.addLog("You place the cue ball.");
           this.autoPlanNextPlayerShot();
         } else {
@@ -2547,7 +2695,11 @@
       const point = this.getPointerPosition(event);
       this.pointer.screenX = point.x;
       this.pointer.screenY = point.y;
-      this.zoomCamera(event.deltaY);
+      if (this.isPlayerAimCameraActive()) {
+        this.adjustPlayerAimCameraZoom(event.deltaY);
+      } else {
+        this.zoomCamera(event.deltaY);
+      }
     }
 
     getPointerPosition(event) {

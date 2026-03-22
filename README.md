@@ -24,8 +24,17 @@ Then visit `http://localhost:3000`.
 - Drag empty space to orbit the table.
 - Right-drag, middle-drag, or hold `Shift` while dragging to pan.
 - Use the mouse wheel or trackpad scroll to zoom.
-- Click the cue ball to enter shot mode, then aim over the table.
-- On non-break shots, click a legal object ball, click a pocket, then shoot.
+- The game now preloads the next legal shot for the human player and swings the
+  camera behind the cue ball so the cue ball stays closest to the camera.
+- Drag and wheel input in shot mode now work as shot-camera adjustments, so you
+  can fine-tune the suggested angle and zoom without losing the behind-the-cue
+  view.
+- Click the cue ball to enter shot mode if you want to override the current
+  suggestion manually.
+- On non-break shots, click a legal object ball and pocket to replace the
+  current call, then shoot.
+- Click the currently selected object ball again to clear that target and swap
+  to a different shot.
 - Use the in-canvas cue-ball spin control and vertical power bar, then click
   the cue ball again to fire the shot.
 - Use `Safety` to call a safety instead of a pot.
