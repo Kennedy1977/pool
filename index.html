@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>Pool Night</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Single-Player 8-Ball</p>
+          <h1>Pool Night</h1>
+          <p class="hero-copy">
+            A camera-angled browser table with rolling balls, drag-to-shoot
+            control, simplified 8-ball rules, and a CPU opponent that actually
+            plans its shots.
+          </p>
+        </div>
+        <button id="newGameBtn" class="primary-button" type="button">
+          New Rack
+        </button>
+      </header>
+
+      <main class="layout">
+        <section class="table-card">
+          <canvas
+            id="gameCanvas"
+            width="1280"
+            height="760"
+            aria-label="Pool table"
+          ></canvas>
+          <p class="table-hint">
+            Drag backward from the cue ball to shoot. After a scratch, click a
+            clear spot on the cloth to place the cue ball.
+          </p>
+        </section>
+
+        <aside class="hud-card">
+          <section class="hud-section">
+            <p class="section-label">Match</p>
+            <div class="stat-grid">
+              <div class="stat">
+                <span class="stat-label">Turn</span>
+                <strong id="turnLabel">You</strong>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Status</span>
+                <strong id="statusLabel">Rack them up.</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="hud-section">
+            <p class="section-label">Groups</p>
+            <div class="stat-grid">
+              <div class="stat">
+                <span class="stat-label">You</span>
+                <strong id="playerGroupLabel">Open Table</strong>
+              </div>
+              <div class="stat">
+                <span class="stat-label">CPU</span>
+                <strong id="cpuGroupLabel">Open Table</strong>
+              </div>
+              <div class="stat">
+                <span class="stat-label">You Left</span>
+                <strong id="playerCountLabel">7</strong>
+              </div>
+              <div class="stat">
+                <span class="stat-label">CPU Left</span>
+                <strong id="cpuCountLabel">7</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="hud-section">
+            <p class="section-label">Shot Power</p>
+            <div class="power-meter" aria-hidden="true">
+              <div id="powerFill" class="power-fill"></div>
+            </div>
+            <p class="microcopy">
+              The power meter reacts as you pull the cue back.
+            </p>
+          </section>
+
+          <section class="hud-section">
+            <p class="section-label">Recent Play</p>
+            <ol id="eventLog" class="event-log"></ol>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <script src="./game.js"></script>
+  </body>
+</html>
