@@ -4041,43 +4041,53 @@
 
   window.addEventListener("DOMContentLoaded", () => {
     const modeScreen = document.getElementById("modeScreen");
-    const pokerPlaceholder = document.getElementById("pokerPlaceholder");
     const poolApp = document.getElementById("poolApp");
+    const pokerApp = document.getElementById("pokerApp");
     const choosePoolBtn = document.getElementById("choosePoolBtn");
     const choosePokerBtn = document.getElementById("choosePokerBtn");
-    const launchPoolBtn = document.getElementById("launchPoolBtn");
-    const backToMenuBtn = document.getElementById("backToMenuBtn");
+    const backToMenuFromPoolBtn = document.getElementById("backToMenuFromPoolBtn");
+    const backToMenuFromPokerBtn = document.getElementById("backToMenuFromPokerBtn");
 
-    let game = null;
+    let poolGame = null;
+    let pokerGame = null;
 
     const launchPool = () => {
       modeScreen.hidden = true;
-      pokerPlaceholder.hidden = true;
+      pokerApp.hidden = true;
       poolApp.hidden = false;
 
-      if (!game) {
-        game = new PoolGame();
+      if (!poolGame) {
+        poolGame = new PoolGame();
         return;
       }
 
-      game.resetGame();
+      poolGame.resetGame();
     };
 
-    const showPokerPlaceholder = () => {
+    const launchPoker = () => {
       modeScreen.hidden = true;
       poolApp.hidden = true;
-      pokerPlaceholder.hidden = false;
+      pokerApp.hidden = false;
+
+      if (!pokerGame && window.PokerGame) {
+        pokerGame = new window.PokerGame();
+        return;
+      }
+
+      if (pokerGame) {
+        pokerGame.resetMatch();
+      }
     };
 
     const showModeMenu = () => {
       modeScreen.hidden = false;
       poolApp.hidden = true;
-      pokerPlaceholder.hidden = true;
+      pokerApp.hidden = true;
     };
 
     choosePoolBtn.addEventListener("click", launchPool);
-    choosePokerBtn.addEventListener("click", showPokerPlaceholder);
-    launchPoolBtn.addEventListener("click", launchPool);
-    backToMenuBtn.addEventListener("click", showModeMenu);
+    choosePokerBtn.addEventListener("click", launchPoker);
+    backToMenuFromPoolBtn.addEventListener("click", showModeMenu);
+    backToMenuFromPokerBtn.addEventListener("click", showModeMenu);
   });
 })();
