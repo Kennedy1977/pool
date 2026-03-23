@@ -52,6 +52,33 @@
     H: "#ff7b8f",
     D: "#f6c660",
   };
+  const CARD_SHEET = {
+    src: "./assets/cards.jpg",
+    columns: 13,
+    rows: 4,
+    cropInset: 2,
+  };
+  const SUIT_ROW_INDEX = {
+    C: 0,
+    D: 1,
+    H: 2,
+    S: 3,
+  };
+  const RANK_COLUMN_INDEX = {
+    14: 0,
+    2: 1,
+    3: 2,
+    4: 3,
+    5: 4,
+    6: 5,
+    7: 6,
+    8: 7,
+    9: 8,
+    10: 9,
+    11: 10,
+    12: 11,
+    13: 12,
+  };
 
   const STREET_LABELS = {
     preflop: "Pre-Flop",
@@ -397,6 +424,8 @@
 
       this.ctx = this.canvas.getContext("2d");
       this.camera = createCamera();
+      this.cardSheet = this.createCardSheet();
+      this.cardSprites = new Map();
       this.deck = [];
       this.board = [];
       this.holeCards = {
@@ -476,6 +505,61 @@
 
         this.startHand();
       });
+    }
+
+    createCardSheet() {
+      const image = new Image();
+      image.decoding = "async";
+      image.src = CARD_SHEET.src;
+      image.addEventListener("load", () => {
+        this.buildCardSprites();
+      });
+      return image;
+    }
+
+    buildCardSprites() {
+      if (
+        !this.cardSheet ||
+        !this.cardSheet.complete ||
+        !this.cardSheet.naturalWidth ||
+        !this.cardSheet.naturalHeight
+      ) {
+        return;
+      }
+
+      this.cardSprites.clear();
+
+      const cellWidth = this.cardSheet.naturalWidth / CARD_SHEET.columns;
+      const cellHeight = this.cardSheet.naturalHeight / CARD_SHEET.rows;
+      const inset = CARD_SHEET.cropInset;
+
+      for (const suit of SUITS) {
+        for (const rank of RANKS) {
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.round(cellWidth - inset * 2);
+          canvas.height = Math.round(cellHeight - inset * 2);
+          const ctx = canvas.getContext("2d");
+
+          const sourceX = cellWidth * RANK_COLUMN_INDEX[rank] + inset;
+          const sourceY = cellHeight * SUIT_ROW_INDEX[suit] + inset;
+          const sourceWidth = cellWidth - inset * 2;
+          const sourceHeight = cellHeight - inset * 2;
+
+          ctx.drawImage(
+            this.cardSheet,
+            sourceX,
+            sourceY,
+            sourceWidth,
+            sourceHeight,
+            0,
+            0,
+            canvas.width,
+            canvas.height
+          );
+
+          this.cardSprites.set(cardLabel({ rank, suit }), canvas);
+        }
+      }
     }
 
     clearCpuTimer() {
@@ -1340,6 +1424,27 @@
       ];
     }
 
+    drawCardFaceSprite(ctx, card, width, height) {
+      const sprite = this.cardSprites.get(cardLabel(card));
+      if (!sprite) {
+        return false;
+      }
+
+      ctx.save();
+      this.roundRect(
+        ctx,
+        -width * 0.5,
+        -height * 0.5,
+        width,
+        height,
+        Math.max(10, width * 0.12)
+      );
+      ctx.clip();
+      ctx.drawImage(sprite, -width * 0.5, -height * 0.5, width, height);
+      ctx.restore();
+      return true;
+    }
+
     drawCard(ctx, card, centerX, centerZ, faceUp, tilt = 0, accent = null) {
       const quad = this.cardQuad(centerX, centerZ, 78, 106, TABLE.topY + 16, tilt);
       const projected = this.projectPolygon(quad);
@@ -1383,6 +1488,22 @@
       ctx.fill();
 
       if (faceUp) {
+        if (this.drawCardFaceSprite(ctx, card, width, height)) {
+          ctx.strokeStyle = glow;
+          ctx.lineWidth = 1.25;
+          this.roundRect(
+            ctx,
+            -width * 0.5,
+            -height * 0.5,
+            width,
+            height,
+            Math.max(10, width * 0.12)
+          );
+          ctx.stroke();
+          ctx.restore();
+          return;
+        }
+
         const cardGradient = ctx.createLinearGradient(0, -height * 0.5, 0, height * 0.5);
         cardGradient.addColorStop(0, "#fffef8");
         cardGradient.addColorStop(1, "#efe6d2");
