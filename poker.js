@@ -22,6 +22,23 @@
     feltRadius: 130,
     topY: 28,
   };
+  const CARD_RENDER = {
+    player: {
+      scale: 68 / 77,
+      z: -208,
+      tilt: 16,
+    },
+    cpu: {
+      scale: 64 / 77,
+      z: 220,
+      tilt: -12,
+    },
+    board: {
+      scale: 60 / 77,
+      z: 2,
+      tilt: 5,
+    },
+  };
 
   const STARTING_STACK = 1000;
   const BLINDS = {
@@ -56,7 +73,9 @@
     src: "./assets/cards.jpg",
     columns: 13,
     rows: 4,
-    cropInset: 2,
+    outerBorder: 1,
+    cropInsetX: 1,
+    cropInsetY: 1,
   };
   const SUIT_ROW_INDEX = {
     C: 0,
@@ -426,6 +445,10 @@
       this.camera = createCamera();
       this.cardSheet = this.createCardSheet();
       this.cardSprites = new Map();
+      this.cardAssetSize = {
+        width: 77,
+        height: 129,
+      };
       this.deck = [];
       this.board = [];
       this.holeCards = {
@@ -510,10 +533,13 @@
     createCardSheet() {
       const image = new Image();
       image.decoding = "async";
-      image.src = CARD_SHEET.src;
       image.addEventListener("load", () => {
         this.buildCardSprites();
       });
+      image.src = CARD_SHEET.src;
+      if (image.complete) {
+        this.buildCardSprites();
+      }
       return image;
     }
 
@@ -529,21 +555,32 @@
 
       this.cardSprites.clear();
 
-      const cellWidth = this.cardSheet.naturalWidth / CARD_SHEET.columns;
-      const cellHeight = this.cardSheet.naturalHeight / CARD_SHEET.rows;
-      const inset = CARD_SHEET.cropInset;
+      const usableWidth = this.cardSheet.naturalWidth - CARD_SHEET.outerBorder * 2;
+      const usableHeight = this.cardSheet.naturalHeight - CARD_SHEET.outerBorder * 2;
+      const cellWidth = Math.floor(usableWidth / CARD_SHEET.columns);
+      const cellHeight = Math.floor(usableHeight / CARD_SHEET.rows);
+      const insetX = CARD_SHEET.cropInsetX;
+      const insetY = CARD_SHEET.cropInsetY;
+      const sourceWidth = Math.max(1, cellWidth - insetX * 2);
+      const sourceHeight = Math.max(1, cellHeight - insetY * 2);
+
+      this.cardAssetSize = {
+        width: sourceWidth,
+        height: sourceHeight,
+      };
 
       for (const suit of SUITS) {
         for (const rank of RANKS) {
           const canvas = document.createElement("canvas");
-          canvas.width = Math.round(cellWidth - inset * 2);
-          canvas.height = Math.round(cellHeight - inset * 2);
+          canvas.width = sourceWidth;
+          canvas.height = sourceHeight;
           const ctx = canvas.getContext("2d");
+          ctx.imageSmoothingEnabled = true;
 
-          const sourceX = cellWidth * RANK_COLUMN_INDEX[rank] + inset;
-          const sourceY = cellHeight * SUIT_ROW_INDEX[suit] + inset;
-          const sourceWidth = cellWidth - inset * 2;
-          const sourceHeight = cellHeight - inset * 2;
+          const sourceX =
+            CARD_SHEET.outerBorder + cellWidth * RANK_COLUMN_INDEX[rank] + insetX;
+          const sourceY =
+            CARD_SHEET.outerBorder + cellHeight * SUIT_ROW_INDEX[suit] + insetY;
 
           ctx.drawImage(
             this.cardSheet,
@@ -560,6 +597,13 @@
           this.cardSprites.set(cardLabel({ rank, suit }), canvas);
         }
       }
+    }
+
+    getCardWorldSize(profile) {
+      return {
+        width: this.cardAssetSize.width * profile.scale,
+        height: this.cardAssetSize.height * profile.scale,
+      };
     }
 
     clearCpuTimer() {
@@ -1445,8 +1489,18 @@
       return true;
     }
 
-    drawCard(ctx, card, centerX, centerZ, faceUp, tilt = 0, accent = null) {
-      const quad = this.cardQuad(centerX, centerZ, 78, 106, TABLE.topY + 16, tilt);
+    drawCard(
+      ctx,
+      card,
+      centerX,
+      centerZ,
+      faceUp,
+      tilt = 0,
+      accent = null,
+      cardWidth = 78,
+      cardHeight = 106
+    ) {
+      const quad = this.cardQuad(centerX, centerZ, cardWidth, cardHeight, TABLE.topY + 16, tilt);
       const projected = this.projectPolygon(quad);
       if (!projected) {
         return;
@@ -1479,48 +1533,79 @@
       ctx.translate(center.x, center.y);
       ctx.rotate(angle);
 
-      const width = averageWidth;
-      const height = averageHeight;
+      const projectedWidth = averageWidth;
+      const projectedHeight = averageHeight;
       const glow = accent || "rgba(255,255,255,0.08)";
 
       ctx.fillStyle = "rgba(0,0,0,0.2)";
-      this.roundRect(ctx, -width * 0.5 + 3, -height * 0.5 + 6, width, height, Math.max(10, width * 0.12));
+      this.roundRect(
+        ctx,
+        -projectedWidth * 0.5 + 3,
+        -projectedHeight * 0.5 + 6,
+        projectedWidth,
+        projectedHeight,
+        Math.max(10, projectedWidth * 0.12)
+      );
       ctx.fill();
 
       if (faceUp) {
-        if (this.drawCardFaceSprite(ctx, card, width, height)) {
+        if (this.drawCardFaceSprite(ctx, card, projectedWidth, projectedHeight)) {
           ctx.strokeStyle = glow;
           ctx.lineWidth = 1.25;
           this.roundRect(
             ctx,
-            -width * 0.5,
-            -height * 0.5,
-            width,
-            height,
-            Math.max(10, width * 0.12)
+            -projectedWidth * 0.5,
+            -projectedHeight * 0.5,
+            projectedWidth,
+            projectedHeight,
+            Math.max(10, projectedWidth * 0.12)
           );
           ctx.stroke();
           ctx.restore();
           return;
         }
 
-        const cardGradient = ctx.createLinearGradient(0, -height * 0.5, 0, height * 0.5);
+        const cardGradient = ctx.createLinearGradient(
+          0,
+          -projectedHeight * 0.5,
+          0,
+          projectedHeight * 0.5
+        );
         cardGradient.addColorStop(0, "#fffef8");
         cardGradient.addColorStop(1, "#efe6d2");
         ctx.fillStyle = cardGradient;
       } else {
-        const backGradient = ctx.createLinearGradient(0, -height * 0.5, 0, height * 0.5);
+        const backGradient = ctx.createLinearGradient(
+          0,
+          -projectedHeight * 0.5,
+          0,
+          projectedHeight * 0.5
+        );
         backGradient.addColorStop(0, "#1f2438");
         backGradient.addColorStop(1, "#0d1221");
         ctx.fillStyle = backGradient;
       }
 
-      this.roundRect(ctx, -width * 0.5, -height * 0.5, width, height, Math.max(10, width * 0.12));
+      this.roundRect(
+        ctx,
+        -projectedWidth * 0.5,
+        -projectedHeight * 0.5,
+        projectedWidth,
+        projectedHeight,
+        Math.max(10, projectedWidth * 0.12)
+      );
       ctx.fill();
 
       ctx.strokeStyle = glow;
       ctx.lineWidth = 1.25;
-      this.roundRect(ctx, -width * 0.5, -height * 0.5, width, height, Math.max(10, width * 0.12));
+      this.roundRect(
+        ctx,
+        -projectedWidth * 0.5,
+        -projectedHeight * 0.5,
+        projectedWidth,
+        projectedHeight,
+        Math.max(10, projectedWidth * 0.12)
+      );
       ctx.stroke();
 
       if (!faceUp) {
@@ -1528,18 +1613,24 @@
         ctx.lineWidth = 1;
         this.roundRect(
           ctx,
-          -width * 0.34,
-          -height * 0.34,
-          width * 0.68,
-          height * 0.68,
-          Math.max(7, width * 0.08)
+          -projectedWidth * 0.34,
+          -projectedHeight * 0.34,
+          projectedWidth * 0.68,
+          projectedHeight * 0.68,
+          Math.max(7, projectedWidth * 0.08)
         );
         ctx.stroke();
         ctx.strokeStyle = "rgba(255,255,255,0.1)";
         for (let line = -2; line <= 2; line += 1) {
           ctx.beginPath();
-          ctx.moveTo(-width * 0.28, line * height * 0.1 - height * 0.16);
-          ctx.lineTo(width * 0.28, line * height * 0.1 + height * 0.16);
+          ctx.moveTo(
+            -projectedWidth * 0.28,
+            line * projectedHeight * 0.1 - projectedHeight * 0.16
+          );
+          ctx.lineTo(
+            projectedWidth * 0.28,
+            line * projectedHeight * 0.1 + projectedHeight * 0.16
+          );
           ctx.stroke();
         }
         ctx.restore();
@@ -1549,13 +1640,13 @@
       const label = cardLabel(card);
       const textColor = SUIT_COLORS[card.suit];
       ctx.fillStyle = textColor;
-      ctx.font = `700 ${Math.max(14, height * 0.2)}px "Trebuchet MS"`;
+      ctx.font = `700 ${Math.max(14, projectedHeight * 0.2)}px "Trebuchet MS"`;
       ctx.textAlign = "center";
-      ctx.fillText(label, 0, height * 0.05);
+      ctx.fillText(label, 0, projectedHeight * 0.05);
 
       ctx.fillStyle = "rgba(15, 25, 38, 0.7)";
-      ctx.font = `700 ${Math.max(10, height * 0.12)}px "Trebuchet MS"`;
-      ctx.fillText(card.suit, 0, height * 0.28);
+      ctx.font = `700 ${Math.max(10, projectedHeight * 0.12)}px "Trebuchet MS"`;
+      ctx.fillText(card.suit, 0, projectedHeight * 0.28);
       ctx.restore();
     }
 
@@ -1655,6 +1746,9 @@
       const playerCards = this.holeCards.player;
       const cpuCards = this.holeCards.cpu;
       const boardCards = this.board;
+      const playerCardSize = this.getCardWorldSize(CARD_RENDER.player);
+      const cpuCardSize = this.getCardWorldSize(CARD_RENDER.cpu);
+      const boardCardSize = this.getCardWorldSize(CARD_RENDER.board);
 
       const playerX = [-62, 62];
       const cpuX = [-62, 62];
@@ -1665,12 +1759,14 @@
           ctx,
           playerCards[index],
           playerX[index],
-          -212,
+          CARD_RENDER.player.z,
           true,
-          14,
+          CARD_RENDER.player.tilt,
           this.activePlayer === "player" && !this.handOver
             ? "rgba(255, 224, 128, 0.28)"
-            : null
+            : null,
+          playerCardSize.width,
+          playerCardSize.height
         );
       }
 
@@ -1679,22 +1775,44 @@
           ctx,
           cpuCards[index],
           cpuX[index],
-          224,
+          CARD_RENDER.cpu.z,
           this.showCpuCards,
-          -12,
+          CARD_RENDER.cpu.tilt,
           this.activePlayer === "cpu" && !this.handOver
             ? "rgba(152, 255, 206, 0.28)"
-            : null
+            : null,
+          cpuCardSize.width,
+          cpuCardSize.height
         );
       }
 
       for (let index = 0; index < boardX.length; index += 1) {
         if (!boardCards[index]) {
-          this.drawCard(ctx, { rank: 14, suit: "S" }, boardX[index], 2, false, 5);
+          this.drawCard(
+            ctx,
+            { rank: 14, suit: "S" },
+            boardX[index],
+            CARD_RENDER.board.z,
+            false,
+            CARD_RENDER.board.tilt,
+            null,
+            boardCardSize.width,
+            boardCardSize.height
+          );
           continue;
         }
 
-        this.drawCard(ctx, boardCards[index], boardX[index], 2, true, 5);
+        this.drawCard(
+          ctx,
+          boardCards[index],
+          boardX[index],
+          CARD_RENDER.board.z,
+          true,
+          CARD_RENDER.board.tilt,
+          null,
+          boardCardSize.width,
+          boardCardSize.height
+        );
       }
     }
 
