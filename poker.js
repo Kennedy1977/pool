@@ -69,34 +69,25 @@
     H: "#ff7b8f",
     D: "#f6c660",
   };
-  const CARD_SHEET = {
-    src: "./assets/cards.jpg",
-    columns: 13,
-    rows: 4,
-    outerBorder: 1,
-    cropInsetX: 1,
-    cropInsetY: 1,
+  const CARD_SHEETS = {
+    C: "./assets/clubs_contact_sheet_highres.png",
+    D: "./assets/diamonds_contact_sheet_highres.png",
+    H: "./assets/hearts_contact_sheet_highres.png",
+    S: "./assets/spades_contact_sheet_highres.png",
   };
-  const SUIT_ROW_INDEX = {
-    C: 0,
-    D: 1,
-    H: 2,
-    S: 3,
-  };
-  const RANK_COLUMN_INDEX = {
-    14: 0,
-    2: 1,
-    3: 2,
-    4: 3,
-    5: 4,
-    6: 5,
-    7: 6,
-    8: 7,
-    9: 8,
-    10: 9,
-    11: 10,
-    12: 11,
-    13: 12,
+  const CARD_CONTACT_LAYOUT = {
+    analysisWidth: 800,
+    foregroundThreshold: 18,
+    rowInkRatio: 0.018,
+    minRowHeightRatio: 0.08,
+    minColInkRatio: 0.16,
+    minColWidthRatio: 0.05,
+    cardInset: 2,
+    rowRanks: [
+      [14, 2, 3, 4, 5],
+      [6, 7, 8, 9],
+      [10, 11, 12, 13],
+    ],
   };
 
   const STREET_LABELS = {
@@ -394,6 +385,31 @@
     return `$${Math.round(value)}`;
   }
 
+  function findSegments(values, threshold, minLength = 1) {
+    const segments = [];
+    let start = -1;
+
+    for (let index = 0; index < values.length; index += 1) {
+      if (values[index] >= threshold) {
+        if (start === -1) {
+          start = index;
+        }
+        continue;
+      }
+
+      if (start !== -1 && index - start >= minLength) {
+        segments.push({ start, end: index - 1 });
+      }
+      start = -1;
+    }
+
+    if (start !== -1 && values.length - start >= minLength) {
+      segments.push({ start, end: values.length - 1 });
+    }
+
+    return segments;
+  }
+
   function describeMadeHand(bestHand) {
     if (!bestHand) {
       return "No hand yet";
@@ -443,12 +459,12 @@
 
       this.ctx = this.canvas.getContext("2d");
       this.camera = createCamera();
-      this.cardSheet = this.createCardSheet();
       this.cardSprites = new Map();
       this.cardAssetSize = {
         width: 77,
         height: 129,
       };
+      this.cardSheets = this.createCardSheets();
       this.deck = [];
       this.board = [];
       this.holeCards = {
@@ -530,72 +546,197 @@
       });
     }
 
-    createCardSheet() {
-      const image = new Image();
-      image.decoding = "async";
-      image.addEventListener("load", () => {
-        this.buildCardSprites();
-      });
-      image.src = CARD_SHEET.src;
-      if (image.complete) {
-        this.buildCardSprites();
+    createCardSheets() {
+      const sheets = new Map();
+
+      for (const suit of SUITS) {
+        const image = new Image();
+        image.decoding = "async";
+        sheets.set(suit, image);
+        image.addEventListener("load", () => {
+          this.buildCardSpritesForSuit(suit, image);
+        });
+        image.src = CARD_SHEETS[suit];
+        if (image.complete) {
+          this.buildCardSpritesForSuit(suit, image);
+        }
       }
-      return image;
+
+      return sheets;
     }
 
-    buildCardSprites() {
+    isForegroundPixel(data, offset, background) {
+      if (data[offset + 3] < 16) {
+        return false;
+      }
+
+      const distance =
+        Math.abs(data[offset] - background.r) +
+        Math.abs(data[offset + 1] - background.g) +
+        Math.abs(data[offset + 2] - background.b);
+
+      return distance >= CARD_CONTACT_LAYOUT.foregroundThreshold;
+    }
+
+    detectCardRects(sheetImage) {
+      if (!sheetImage || !sheetImage.naturalWidth || !sheetImage.naturalHeight) {
+        return null;
+      }
+
+      const analysisWidth = CARD_CONTACT_LAYOUT.analysisWidth;
+      const analysisHeight = Math.max(
+        1,
+        Math.round((sheetImage.naturalHeight / sheetImage.naturalWidth) * analysisWidth)
+      );
+      const analysisCanvas = document.createElement("canvas");
+      analysisCanvas.width = analysisWidth;
+      analysisCanvas.height = analysisHeight;
+      const analysisCtx = analysisCanvas.getContext("2d", { willReadFrequently: true });
+      analysisCtx.drawImage(sheetImage, 0, 0, analysisWidth, analysisHeight);
+
+      const { data } = analysisCtx.getImageData(0, 0, analysisWidth, analysisHeight);
+      const background = {
+        r: data[0],
+        g: data[1],
+        b: data[2],
+      };
+      const rowInk = new Uint16Array(analysisHeight);
+
+      for (let y = 0; y < analysisHeight; y += 1) {
+        let ink = 0;
+        for (let x = 0; x < analysisWidth; x += 1) {
+          const offset = (y * analysisWidth + x) * 4;
+          if (this.isForegroundPixel(data, offset, background)) {
+            ink += 1;
+          }
+        }
+        rowInk[y] = ink;
+      }
+
+      const rowSegments = findSegments(
+        rowInk,
+        Math.max(8, Math.round(analysisWidth * CARD_CONTACT_LAYOUT.rowInkRatio)),
+        Math.max(12, Math.round(analysisHeight * CARD_CONTACT_LAYOUT.minRowHeightRatio))
+      ).slice(0, CARD_CONTACT_LAYOUT.rowRanks.length);
+
+      if (rowSegments.length !== CARD_CONTACT_LAYOUT.rowRanks.length) {
+        return;
+      }
+
+      const scaleX = sheetImage.naturalWidth / analysisWidth;
+      const scaleY = sheetImage.naturalHeight / analysisHeight;
+      const ranksByRow = CARD_CONTACT_LAYOUT.rowRanks;
+      const cardRects = new Map();
+      let totalWidth = 0;
+      let totalHeight = 0;
+      let rectCount = 0;
+
+      for (let rowIndex = 0; rowIndex < rowSegments.length; rowIndex += 1) {
+        const rowSegment = rowSegments[rowIndex];
+        const ranks = ranksByRow[rowIndex];
+        const rowHeight = rowSegment.end - rowSegment.start + 1;
+        const colInk = new Uint16Array(analysisWidth);
+
+        for (let x = 0; x < analysisWidth; x += 1) {
+          let ink = 0;
+          for (let y = rowSegment.start; y <= rowSegment.end; y += 1) {
+            const offset = (y * analysisWidth + x) * 4;
+            if (this.isForegroundPixel(data, offset, background)) {
+              ink += 1;
+            }
+          }
+          colInk[x] = ink;
+        }
+
+        const colSegments = findSegments(
+          colInk,
+          Math.max(6, Math.round(rowHeight * CARD_CONTACT_LAYOUT.minColInkRatio)),
+          Math.max(18, Math.round(analysisWidth * CARD_CONTACT_LAYOUT.minColWidthRatio))
+        );
+
+        if (colSegments.length !== ranks.length) {
+          return null;
+        }
+
+        for (let columnIndex = 0; columnIndex < colSegments.length; columnIndex += 1) {
+          const segment = colSegments[columnIndex];
+          const inset = CARD_CONTACT_LAYOUT.cardInset;
+          const left = Math.max(0, segment.start + inset);
+          const right = Math.min(analysisWidth - 1, segment.end - inset);
+          const top = Math.max(0, rowSegment.start + inset);
+          const bottom = Math.min(analysisHeight - 1, rowSegment.end - inset);
+          const sourceX = Math.round(left * scaleX);
+          const sourceY = Math.round(top * scaleY);
+          const sourceWidth = Math.max(1, Math.round((right - left + 1) * scaleX));
+          const sourceHeight = Math.max(1, Math.round((bottom - top + 1) * scaleY));
+
+          totalWidth += sourceWidth;
+          totalHeight += sourceHeight;
+          rectCount += 1;
+          cardRects.set(ranks[columnIndex], {
+            x: sourceX,
+            y: sourceY,
+            width: sourceWidth,
+            height: sourceHeight,
+          });
+        }
+      }
+
+      if (!rectCount) {
+        return null;
+      }
+
+      return {
+        cardRects,
+        averageWidth: Math.round(totalWidth / rectCount),
+        averageHeight: Math.round(totalHeight / rectCount),
+      };
+    }
+
+    buildCardSpritesForSuit(suit, sheetImage = this.cardSheets.get(suit)) {
       if (
-        !this.cardSheet ||
-        !this.cardSheet.complete ||
-        !this.cardSheet.naturalWidth ||
-        !this.cardSheet.naturalHeight
+        !sheetImage ||
+        !sheetImage.complete ||
+        !sheetImage.naturalWidth ||
+        !sheetImage.naturalHeight
       ) {
         return;
       }
 
-      this.cardSprites.clear();
-
-      const usableWidth = this.cardSheet.naturalWidth - CARD_SHEET.outerBorder * 2;
-      const usableHeight = this.cardSheet.naturalHeight - CARD_SHEET.outerBorder * 2;
-      const cellWidth = Math.floor(usableWidth / CARD_SHEET.columns);
-      const cellHeight = Math.floor(usableHeight / CARD_SHEET.rows);
-      const insetX = CARD_SHEET.cropInsetX;
-      const insetY = CARD_SHEET.cropInsetY;
-      const sourceWidth = Math.max(1, cellWidth - insetX * 2);
-      const sourceHeight = Math.max(1, cellHeight - insetY * 2);
+      const extraction = this.detectCardRects(sheetImage);
+      if (!extraction) {
+        return;
+      }
 
       this.cardAssetSize = {
-        width: sourceWidth,
-        height: sourceHeight,
+        width: extraction.averageWidth,
+        height: extraction.averageHeight,
       };
 
-      for (const suit of SUITS) {
-        for (const rank of RANKS) {
-          const canvas = document.createElement("canvas");
-          canvas.width = sourceWidth;
-          canvas.height = sourceHeight;
-          const ctx = canvas.getContext("2d");
-          ctx.imageSmoothingEnabled = true;
-
-          const sourceX =
-            CARD_SHEET.outerBorder + cellWidth * RANK_COLUMN_INDEX[rank] + insetX;
-          const sourceY =
-            CARD_SHEET.outerBorder + cellHeight * SUIT_ROW_INDEX[suit] + insetY;
-
-          ctx.drawImage(
-            this.cardSheet,
-            sourceX,
-            sourceY,
-            sourceWidth,
-            sourceHeight,
-            0,
-            0,
-            canvas.width,
-            canvas.height
-          );
-
-          this.cardSprites.set(cardLabel({ rank, suit }), canvas);
+      for (const rank of RANKS) {
+        const rect = extraction.cardRects.get(rank);
+        if (!rect) {
+          continue;
         }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+        const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(
+          sheetImage,
+          rect.x,
+          rect.y,
+          rect.width,
+          rect.height,
+          0,
+          0,
+          rect.width,
+          rect.height
+        );
+
+        this.cardSprites.set(cardLabel({ rank, suit }), canvas);
       }
     }
 
